@@ -1,6 +1,6 @@
 # @backstage/plugin-lighthouse
 
-A frontend for [lighthouse-audit-service](), this plugin allows you to trigger Lighthouse audits on websites and track them over time.
+A frontend for [lighthouse-audit-service](https://github.com/spotify/lighthouse-audit-service), this plugin allows you to trigger Lighthouse audits on websites and track them over time.
 
 ## Getting Started
 
