@@ -2505,6 +2505,7 @@
     "@material-ui/core" "^4.11.0"
     "@material-ui/icons" "^4.9.1"
     "@material-ui/lab" "4.0.0-alpha.45"
+    "@testing-library/react-hooks" "^3.4.2"
     "@types/dagre" "^0.7.44"
     "@types/prop-types" "^15.7.3"
     "@types/react" "^16.9"
@@ -14199,13 +14200,6 @@ git-url-parse@^11.4.4:
   dependencies:
     git-up "^4.0.0"
 
-git-url-parse@^11.4.4:
-  version "11.4.4"
-  resolved "https://registry.npmjs.org/git-url-parse/-/git-url-parse-11.4.4.tgz#5d747debc2469c17bc385719f7d0427802d83d77"
-  integrity sha512-Y4o9o7vQngQDIU9IjyCmRJBin5iYjI5u9ZITnddRZpD7dcCFQj2sL2XuMNbLRE4b4B/4ENPsp2Q8P44fjAZ0Pw==
-  dependencies:
-    git-up "^4.0.0"
-
 gitconfiglocal@^1.0.0:
   version "1.0.0"
   resolved "https://registry.npmjs.org/gitconfiglocal/-/gitconfiglocal-1.0.0.tgz#41d045f3851a5ea88f03f24ca1c6178114464b9b"
@@ -16292,9 +16286,9 @@ jake@^10.6.1:
     minimatch "^3.0.4"
 
 jenkins@^0.28.0:
-  version "0.28.0"
-  resolved "https://registry.npmjs.org/jenkins/-/jenkins-0.28.0.tgz#72d6fcc452145403b34f6d4ecbd877ee1ab77fca"
-  integrity sha512-EGzzZcyFwXBCPZZoDNvZTPmZOqaHALfAStNfCF37oh+Mc6G/e0MwIuQjx5kMEynTXR9bF5EwLiuMTiTf5kHk5g==
+  version "0.28.1"
+  resolved "https://registry.npmjs.org/jenkins/-/jenkins-0.28.1.tgz#f7951798ee5d2bb501a831979b6b5ecc1a922a64"
+  integrity sha512-gcC4QUrP4VzdqOMHoVzh36XlJprxJkI2HGLQSY7w84KoCTVNDcR/8O00tYyXp9vrZOx4wl5zCXLVKMgH2IoyJQ==
   dependencies:
     papi "^0.29.0"
 
