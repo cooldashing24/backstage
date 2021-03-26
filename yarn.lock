@@ -1994,7 +1994,7 @@
     react-router "6.0.0-beta.0"
     react-router-dom "6.0.0-beta.0"
     react-use "^15.3.3"
-    swr "^0.3.0"
+    swr "^0.5.4"
 
 "@backstage/plugin-catalog@^0.3.1":
   version "0.5.1"
@@ -2018,7 +2018,7 @@
     react-router "6.0.0-beta.0"
     react-router-dom "6.0.0-beta.0"
     react-use "^15.3.3"
-    swr "^0.3.0"
+    swr "^0.5.4"
 
 "@bcoe/v8-coverage@^0.2.3":
   version "0.2.3"
@@ -24983,12 +24983,10 @@ swap-case@^2.0.1:
   dependencies:
     tslib "^2.0.3"
 
-swr@^0.3.0:
-  version "0.3.0"
-  resolved "https://registry.npmjs.org/swr/-/swr-0.3.0.tgz#69602953dd50ab07fe60c920fd63199256645675"
-  integrity sha512-3p0p5TWH0qiaKAph5wBkMwqe2WjNseITfjmdVoNzjqRZGn/gnpRi6whMDjhMVb/vp/yyDtKWPlyjid8QZH+UhA==
-  dependencies:
-    fast-deep-equal "2.0.1"
+swr@^0.5.4:
+  version "0.5.4"
+  resolved "https://registry.npmjs.org/swr/-/swr-0.5.4.tgz#9516af6ffd84ba2c23a804ff771be2eb83ba8d46"
+  integrity sha512-TUSxxuC8uP/4JKV22ml91WQ0tbif+9HVhm683xm8KYfwZIW5ogwcnU634dg3x6N7azpIDIOLokoIi+z5vCz/yA==
 
 symbol-observable@^1.0.3, symbol-observable@^1.0.4, symbol-observable@^1.1.0, symbol-observable@^1.2.0:
   version "1.2.0"
