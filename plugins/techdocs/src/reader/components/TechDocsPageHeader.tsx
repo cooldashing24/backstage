@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Spotify AB
+ * Copyright 2020 The Backstage Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,20 @@
  * limitations under the License.
  */
 
+import { EntityName, RELATION_OWNED_BY } from '@backstage/catalog-model';
+import {
+  EntityRefLink,
+  EntityRefLinks,
+  getEntityRelations,
+} from '@backstage/plugin-catalog-react';
+import CodeIcon from '@material-ui/icons/Code';
 import React from 'react';
 import { AsyncState } from 'react-use/lib/useAsync';
-import CodeIcon from '@material-ui/icons/Code';
-import { EntityName, parseEntityName } from '@backstage/catalog-model';
-import { Header, HeaderLabel, Link, useRouteRef } from '@backstage/core';
+import { rootRouteRef } from '../../routes';
 import { TechDocsMetadata } from '../../types';
-import { EntityRefLink, entityRouteRef } from '@backstage/plugin-catalog-react';
-import { rootRouteRef } from '../../plugin';
+
+import { Header, HeaderLabel } from '@backstage/core-components';
+import { useRouteRef } from '@backstage/core-plugin-api';
 
 type TechDocsPageHeaderProps = {
   entityId: EntityName;
@@ -50,15 +56,12 @@ export const TechDocsPageHeader = ({
 
   const {
     locationMetadata,
-    spec: { owner, lifecycle },
+    spec: { lifecycle },
   } = entityMetadataValues || { spec: {} };
 
-  const componentLink = useRouteRef(entityRouteRef);
-
-  let ownerEntity;
-  if (owner) {
-    ownerEntity = parseEntityName(owner, { defaultKind: 'group' });
-  }
+  const ownedByRelations = entityMetadataValues
+    ? getEntityRelations(entityMetadataValues, RELATION_OWNED_BY)
+    : [];
 
   const docsRootLink = useRouteRef(rootRouteRef)();
 
@@ -67,27 +70,25 @@ export const TechDocsPageHeader = ({
       <HeaderLabel
         label="Component"
         value={
-          <Link style={{ color: '#fff' }} to={componentLink(entityId)}>
-            {name}
-          </Link>
+          <EntityRefLink
+            color="inherit"
+            entityRef={entityId}
+            defaultKind="Component"
+          />
         }
       />
-      {owner ? (
+      {ownedByRelations.length > 0 && (
         <HeaderLabel
           label="Owner"
           value={
-            ownerEntity ? (
-              <EntityRefLink
-                style={{ color: '#fff' }}
-                entityRef={ownerEntity}
-                defaultKind="group"
-              />
-            ) : (
-              owner
-            )
+            <EntityRefLinks
+              color="inherit"
+              entityRefs={ownedByRelations}
+              defaultKind="group"
+            />
           }
         />
-      ) : null}
+      )}
       {lifecycle ? <HeaderLabel label="Lifecycle" value={lifecycle} /> : null}
       {locationMetadata &&
       locationMetadata.type !== 'dir' &&

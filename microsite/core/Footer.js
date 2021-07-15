@@ -33,7 +33,7 @@ class Footer extends React.Component {
             <a
               href={`/docs/features/software-catalog/software-catalog-overview`}
             >
-              Service Catalog
+              Software Catalog
             </a>
             <a href={`/docs/plugins/create-a-plugin`}>Create a Plugin</a>
             <a href={`/docs/dls/design`}>Designing for Backstage</a>
@@ -85,7 +85,7 @@ class Footer extends React.Component {
           </div>
         </section>
         <p style={{ textAlign: 'center' }}>
-          <a href="https://spotify.github.io">Made with ❤️&nbsp; at Spotify</a>
+          <a href="https://spotify.github.io">Made with ❤️&nbsp;at Spotify</a>
         </p>
         <p className="copyright">{this.props.config.copyright}</p>
       </footer>
