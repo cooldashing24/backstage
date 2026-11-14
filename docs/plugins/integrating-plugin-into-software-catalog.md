@@ -4,6 +4,12 @@ title: Integrate into the Software Catalog
 description: How to integrate a plugin into software catalog
 ---
 
+:::caution[Legacy Documentation]
+
+This page describes integrating plugins into the Software Catalog using the **old frontend system** patterns (`EntitySwitch`, `EntityLayout`, `EntityLayout.Route`). For the new frontend system, entity page integrations are done using `EntityCardBlueprint` and `EntityContentBlueprint` — see [Common Extension Blueprints](../frontend-system/building-plugins/03-common-extension-blueprints.md).
+
+:::
+
 > This is an advanced use case and currently is an experimental feature. Expect
 > API to change over time
 
@@ -20,8 +26,9 @@ should have a separate package in a folder, which represents your plugin.
 
 Example:
 
-```
-$ yarn create-plugin
+```shell-session
+$ yarn new
+# Select `frontend-plugin`
 > ? Enter an ID for the plugin [required] my-plugin
 > ? Enter the owner(s) of the plugin. If specified, this will be added to CODEOWNERS for the plugin path. [optional]
 
@@ -31,20 +38,20 @@ Creating the plugin...
 ### Reading entities from within your plugin
 
 You can access the currently selected entity using the backstage api
-[`useEntity`](../reference/plugin-catalog-react.useentity.md). For example,
+[`useEntity`](https://backstage.io/api/stable/functions/_backstage_plugin-catalog-react.index.useEntity.html). For example,
 
 ```tsx
 import { useEntity } from '@backstage/plugin-catalog-react';
 
 export const MyPluginEntityContent = () => {
-  const { entity, loading, error, refresh } = useEntity();
+  const entity = useEntity();
 
   // Do something with the entity data...
 };
 ```
 
 Internally `useEntity` makes use of
-[react `Context`s](https://reactjs.org/docs/context.html). The entity context is
+[react `Contexts`](https://18.react.dev/learn/passing-data-deeply-with-context). The entity context is
 provided by the entity page into which your plugin will be embedded.
 
 ### Import your plugin and embed in the entities page
@@ -54,7 +61,7 @@ To begin, you will need to import your plugin in the entities page. Located at
 your backstage app.
 
 ```tsx
-import { MyPluginEntityContent } from '@backstage/plugin-my-plugin;
+import { MyPluginEntityContent } from '@backstage/plugin-my-plugin';
 ```
 
 To add your component to the Entity view, you will need to modify the
@@ -62,7 +69,7 @@ To add your component to the Entity view, you will need to modify the
 your plugin, you may only care about certain kinds of
 [entities](https://backstage.io/docs/features/software-catalog/descriptor-format),
 each of which has its own
-[element](https://reactjs.org/docs/rendering-elements.html) for rendering. This
+element for rendering. This
 functionality is handled by the `EntitySwitch` component:
 
 ```tsx
@@ -93,7 +100,7 @@ const systemPage = (
     <EntityLayout.Route path="/" title="Overview">
       <Grid container spacing={3} alignItems="stretch">
         <Grid item md={6}>
-          <EntityAboutCard variant="gridItem" />
+          <EntityAboutCard />
         </Grid>
         <Grid item md={6}>
           <EntityHasComponentsCard variant="gridItem" />
@@ -107,7 +114,7 @@ const systemPage = (
       </Grid>
     </EntityLayout.Route>
     <EntityLayout.Route path="/diagram" title="Diagram">
-      <EntitySystemDiagramCard />
+      <EntityCatalogGraphCard variant="gridItem" height={400} />
     </EntityLayout.Route>
 
     {/* Adding a new tab to the system view */}

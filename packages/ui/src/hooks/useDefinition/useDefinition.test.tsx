@@ -1,0 +1,716 @@
+/*
+ * Copyright 2026 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import { TestRouter } from '../../testUtils/TestRouter';
+import { type PropsWithChildren } from 'react';
+import { renderHook, render } from '@testing-library/react';
+
+import { useDefinition } from './useDefinition';
+import type { ComponentConfig } from './types';
+import { BgProvider, useBgConsumer } from '../useBg';
+import { noopTracker } from '../../analytics/useAnalytics';
+import { BUIProvider } from '../../provider';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function BgReader() {
+  const { bg } = useBgConsumer();
+  return <span data-testid="bg">{bg ?? 'none'}</span>;
+}
+
+function Wrapper({ children }: PropsWithChildren) {
+  return <BUIProvider>{children}</BUIProvider>;
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const basicDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    variant: { dataAttribute: true } as const,
+    size: { dataAttribute: true, default: 'medium' } as const,
+    className: {},
+  },
+} as const satisfies ComponentConfig<any, any>;
+
+const multiSlotDef = {
+  styles: { root: 'css-root', content: 'css-content' },
+  classNames: { root: 'root', content: 'content' },
+  propDefs: {
+    variant: { dataAttribute: true } as const,
+    className: {},
+  },
+  utilityProps: ['m'] as const,
+} as const satisfies ComponentConfig<any, any>;
+
+const utilityDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    variant: {},
+    className: {},
+  },
+  utilityProps: ['m', 'p', 'width'] as const,
+} as const satisfies ComponentConfig<any, any>;
+
+const providerDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    bg: { dataAttribute: true } as const,
+    children: {},
+    className: {},
+  },
+  bg: 'provider' as const,
+} as const satisfies ComponentConfig<any, any>;
+
+const consumerDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    variant: {},
+    className: {},
+  },
+  bg: 'consumer' as const,
+} as const satisfies ComponentConfig<any, any>;
+
+const analyticsDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    noTrack: {},
+    className: {},
+  },
+  analytics: true,
+} as const satisfies ComponentConfig<any, any>;
+
+const hrefDef = {
+  styles: { root: 'css-root' },
+  classNames: { root: 'root' },
+  propDefs: {
+    href: {},
+    className: {},
+  },
+} as const satisfies ComponentConfig<any, any>;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('useDefinition', () => {
+  describe('prop resolution', () => {
+    it('returns resolved own props from propDefs', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.variant).toBe('primary');
+    });
+
+    it('applies default values for missing own props', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect((result.current.ownProps as any).size).toBe('medium');
+    });
+
+    it('returns rest props for props not in propDefs or utilityProps', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(basicDef, {
+            variant: 'primary',
+            'aria-label': 'test',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.restProps).toEqual({ 'aria-label': 'test' });
+    });
+
+    it('excludes utility props from both ownProps and restProps', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(utilityDef, {
+            variant: 'primary',
+            m: '2',
+            'aria-label': 'test',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps).not.toHaveProperty('m');
+      expect(result.current.restProps).not.toHaveProperty('m');
+      expect(result.current.restProps).toEqual({ 'aria-label': 'test' });
+    });
+  });
+
+  describe('classes', () => {
+    it('builds a classes object with keys matching definition.classNames', () => {
+      const { result } = renderHook(
+        () => useDefinition(multiSlotDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes).toHaveProperty('root');
+      expect(result.current.ownProps.classes).toHaveProperty('content');
+    });
+
+    it('includes the base CSS class from definition.styles', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).toContain('css-root');
+    });
+
+    it('appends user className to the root slot by default', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(basicDef, {
+            variant: 'primary',
+            className: 'custom',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).toContain('custom');
+    });
+
+    it('appends utility classes to the root slot by default', () => {
+      const { result } = renderHook(
+        () => useDefinition(utilityDef, { variant: 'primary', m: '2' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).toContain('bui-m-2');
+    });
+
+    it('appends user className to a custom classNameTarget slot', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            multiSlotDef,
+            { variant: 'primary', className: 'custom' },
+            {
+              classNameTarget: 'content',
+            },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.content).toContain('custom');
+      expect(result.current.ownProps.classes.root).not.toContain('custom');
+    });
+
+    it('appends utility classes to a custom utilityTarget slot', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            multiSlotDef,
+            { variant: 'primary', m: '2' },
+            {
+              utilityTarget: 'content',
+            },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.content).toContain('bui-m-2');
+      expect(result.current.ownProps.classes.root).not.toContain('bui-m-2');
+    });
+
+    it('does not append user className when classNameTarget is null', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            basicDef,
+            { variant: 'primary', className: 'custom' },
+            {
+              classNameTarget: null,
+            },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).not.toContain('custom');
+    });
+
+    it('does not append utility classes when utilityTarget is null', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            utilityDef,
+            { variant: 'primary', m: '2' },
+            {
+              utilityTarget: null,
+            },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).not.toContain('bui-m-2');
+    });
+
+    it('keeps non-targeted slots free of utility classes and user className', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(multiSlotDef, {
+            variant: 'primary',
+            m: '2',
+            className: 'custom',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      // Defaults target root — content should be clean
+      expect(result.current.ownProps.classes.content).not.toContain('bui-m-2');
+      expect(result.current.ownProps.classes.content).not.toContain('custom');
+    });
+  });
+
+  describe('data attributes', () => {
+    it('generates data-* attributes for props with dataAttribute: true', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes['data-variant']).toBe('primary');
+    });
+
+    it('does not generate data-* for props without dataAttribute', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(basicDef, {
+            variant: 'primary',
+            className: 'custom',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes).not.toHaveProperty(
+        'data-classname',
+      );
+    });
+
+    it('omits data-* when the prop value is undefined', () => {
+      const { result } = renderHook(() => useDefinition(basicDef, {}), {
+        wrapper: Wrapper,
+      });
+
+      expect(result.current.dataAttributes).not.toHaveProperty('data-variant');
+    });
+
+    it('stringifies non-string prop values in data attributes', () => {
+      const numericDef = {
+        styles: { root: 'css-root' },
+        classNames: { root: 'root' },
+        propDefs: {
+          count: { dataAttribute: true } as const,
+          className: {},
+        },
+      } as const satisfies ComponentConfig<any, any>;
+
+      const { result } = renderHook(
+        () => useDefinition(numericDef, { count: 42 }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes['data-count']).toBe('42');
+    });
+
+    it('does not generate data-bg from propDefs when bg=provider (uses provider path instead)', () => {
+      const localProviderDef = {
+        styles: { root: 'css-root' },
+        classNames: { root: 'root' },
+        propDefs: {
+          bg: { dataAttribute: true } as const,
+          children: {},
+          className: {},
+        },
+        bg: 'provider' as const,
+      } as const satisfies ComponentConfig<any, any>;
+
+      const { result } = renderHook(
+        () =>
+          useDefinition(localProviderDef, {
+            bg: 'danger',
+            children: null,
+          }),
+        { wrapper: Wrapper },
+      );
+
+      // data-bg comes from the provider resolution path, not the propDef
+      expect(result.current.dataAttributes['data-bg']).toBe('danger');
+    });
+  });
+
+  describe('bg: provider', () => {
+    it('sets data-bg from the resolved provider bg value', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            bg: 'danger',
+            children: null,
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes['data-bg']).toBe('danger');
+    });
+
+    it('does not set data-bg when bg prop is undefined', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            children: null,
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes).not.toHaveProperty('data-bg');
+    });
+
+    it('adds childrenWithBgProvider to ownProps', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            bg: 'neutral',
+            children: 'hello',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps).toHaveProperty('childrenWithBgProvider');
+    });
+
+    it('wraps children in BgProvider when bg resolves to a value', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            bg: 'neutral',
+            children: <BgReader />,
+          }),
+        { wrapper: Wrapper },
+      );
+
+      const { getByTestId } = render(
+        <>{result.current.ownProps.childrenWithBgProvider}</>,
+      );
+
+      expect(getByTestId('bg')).toHaveTextContent('neutral-1');
+    });
+
+    it('returns raw children as childrenWithBgProvider when bg is undefined', () => {
+      const childContent = <span>hello</span>;
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            children: childContent,
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.childrenWithBgProvider).toBe(childContent);
+    });
+
+    it('increments neutral bg level from parent context', () => {
+      const wrapper = ({ children }: PropsWithChildren) => (
+        <BUIProvider>
+          <BgProvider bg="neutral-1">{children}</BgProvider>
+        </BUIProvider>
+      );
+
+      const { result } = renderHook(
+        () =>
+          useDefinition(providerDef, {
+            bg: 'neutral',
+            children: <BgReader />,
+          }),
+        { wrapper },
+      );
+
+      expect(result.current.dataAttributes['data-bg']).toBe('neutral-2');
+    });
+  });
+
+  describe('bg: consumer', () => {
+    it('sets data-on-bg from parent BgProvider context', () => {
+      const wrapper = ({ children }: PropsWithChildren) => (
+        <BUIProvider>
+          <BgProvider bg="neutral-1">{children}</BgProvider>
+        </BUIProvider>
+      );
+
+      const { result } = renderHook(
+        () => useDefinition(consumerDef, { variant: 'primary' }),
+        { wrapper },
+      );
+
+      expect(result.current.dataAttributes['data-on-bg']).toBe('neutral-1');
+    });
+
+    it('does not set data-on-bg when no parent BgProvider exists', () => {
+      const { result } = renderHook(
+        () => useDefinition(consumerDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes).not.toHaveProperty('data-on-bg');
+    });
+
+    it('returns children (not childrenWithBgProvider) in ownProps', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(consumerDef, { variant: 'primary', children: 'hello' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps).toHaveProperty('children', 'hello');
+      expect(result.current.ownProps).not.toHaveProperty(
+        'childrenWithBgProvider',
+      );
+    });
+  });
+
+  describe('no bg config', () => {
+    it('does not set data-bg or data-on-bg', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.dataAttributes).not.toHaveProperty('data-bg');
+      expect(result.current.dataAttributes).not.toHaveProperty('data-on-bg');
+    });
+
+    it('returns children in ownProps', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(basicDef, { variant: 'primary', children: 'hello' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps).toHaveProperty('children', 'hello');
+    });
+  });
+
+  describe('utility style', () => {
+    it('returns utilityStyle with CSS custom properties from utility props', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(utilityDef, {
+            variant: 'primary',
+            width: '100px',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.utilityStyle).toEqual({ '--width': '100px' });
+    });
+
+    it('returns empty utilityStyle when no utility props are provided', () => {
+      const { result } = renderHook(
+        () => useDefinition(utilityDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.utilityStyle).toEqual({});
+    });
+  });
+
+  describe('analytics', () => {
+    it('returns analytics tracker when definition.analytics is true', () => {
+      const { result } = renderHook(() => useDefinition(analyticsDef, {}), {
+        wrapper: Wrapper,
+      });
+
+      expect(result.current).toHaveProperty('analytics');
+      expect(result.current.analytics).toHaveProperty('captureEvent');
+    });
+
+    it('does not include analytics key when definition.analytics is not set', () => {
+      const { result } = renderHook(
+        () => useDefinition(basicDef, { variant: 'primary' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current).not.toHaveProperty('analytics');
+    });
+
+    it('returns noopTracker when noTrack is true', () => {
+      const { result } = renderHook(
+        () => useDefinition(analyticsDef, { noTrack: true }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.analytics).toBe(noopTracker);
+    });
+  });
+
+  describe('href props', () => {
+    it.each([
+      '/absolute',
+      'child',
+      '../sibling?tab=docs#api',
+      'mailto:',
+      '//host/path',
+    ])('preserves the caller href %s inside and outside React Router', href => {
+      const outsideRouter = renderHook(() => useDefinition(hrefDef, { href }), {
+        wrapper: Wrapper,
+      });
+      expect(
+        outsideRouter.result.current.ownProps.href ??
+          outsideRouter.result.current.restProps.href,
+      ).toBe(href);
+
+      const insideRouter = renderHook(() => useDefinition(hrefDef, { href }), {
+        wrapper: ({ children }: PropsWithChildren) => (
+          <TestRouter
+            initialEntries={['/catalog/entity']}
+            future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+          >
+            <BUIProvider>{children}</BUIProvider>
+          </TestRouter>
+        ),
+      });
+      expect(
+        insideRouter.result.current.ownProps.href ??
+          insideRouter.result.current.restProps.href,
+      ).toBe(href);
+    });
+  });
+
+  describe('href safety', () => {
+    // Every BUI component that takes an href reaches its element through this
+    // hook, so making the href safe here is what covers all of them at once —
+    // Link takes its href from restProps, MenuItem, Row, Tab, Card, HeaderNav
+    // and TagGroup declare it in propDefs and read it from ownProps. Both
+    // routes out of the hook have to be checked, and both with and without a
+    // router, since the resolution branch only runs inside one.
+    describe('executable schemes', () => {
+      it.each`
+        description                  | href
+        ${'javascript:'}             | ${'javascript:alert(1)'}
+        ${'a disguised leading tab'} | ${'\tjavascript:alert(1)'}
+        ${'mixed case'}              | ${'JavaScript:alert(1)'}
+        ${'data:'}                   | ${'data:text/html,<script>alert(1)</script>'}
+        ${'vbscript:'}               | ${'vbscript:msgbox(1)'}
+      `('makes $description inert on both prop routes', ({ href }) => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+        // Declared in propDefs, so it lands in ownProps — MenuItem, Row, Tab.
+        const asOwnProp = renderHook(() => useDefinition(hrefDef, { href }), {
+          wrapper: ({ children }: PropsWithChildren) => (
+            <TestRouter
+              initialEntries={['/catalog']}
+              future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+            >
+              <BUIProvider>{children}</BUIProvider>
+            </TestRouter>
+          ),
+        });
+        // Not declared, so it falls through to restProps — Link.
+        const asRestProp = renderHook(() => useDefinition(basicDef, { href }), {
+          wrapper: ({ children }: PropsWithChildren) => (
+            <TestRouter
+              initialEntries={['/catalog']}
+              future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+            >
+              <BUIProvider>{children}</BUIProvider>
+            </TestRouter>
+          ),
+        });
+        // No router at all: the resolution branch is skipped entirely, and the
+        // guard still has to hold.
+        const withoutRouter = renderHook(
+          () => useDefinition(hrefDef, { href }),
+          { wrapper: Wrapper },
+        );
+
+        expect(asOwnProp.result.current.ownProps.href).toBe('about:blank');
+        expect(asRestProp.result.current.restProps.href).toBe('about:blank');
+        expect(withoutRouter.result.current.ownProps.href).toBe('about:blank');
+        expect(warn).toHaveBeenCalled();
+        warn.mockRestore();
+      });
+    });
+  });
+
+  describe('options', () => {
+    it('utilityTarget defaults to root', () => {
+      const { result } = renderHook(
+        () => useDefinition(multiSlotDef, { variant: 'primary', m: '2' }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).toContain('bui-m-2');
+      expect(result.current.ownProps.classes.content).not.toContain('bui-m-2');
+    });
+
+    it('classNameTarget defaults to root', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(multiSlotDef, {
+            variant: 'primary',
+            className: 'custom',
+          }),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.root).toContain('custom');
+      expect(result.current.ownProps.classes.content).not.toContain('custom');
+    });
+
+    it('custom utilityTarget applies utility classes to that slot', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            multiSlotDef,
+            { variant: 'primary', m: '2' },
+            { utilityTarget: 'content' },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.content).toContain('bui-m-2');
+      expect(result.current.ownProps.classes.root).not.toContain('bui-m-2');
+    });
+
+    it('custom classNameTarget applies className to that slot', () => {
+      const { result } = renderHook(
+        () =>
+          useDefinition(
+            multiSlotDef,
+            { variant: 'primary', className: 'custom' },
+            { classNameTarget: 'content' },
+          ),
+        { wrapper: Wrapper },
+      );
+
+      expect(result.current.ownProps.classes.content).toContain('custom');
+      expect(result.current.ownProps.classes.root).not.toContain('custom');
+    });
+  });
+});

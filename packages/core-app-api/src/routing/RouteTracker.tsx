@@ -14,20 +14,15 @@
  * limitations under the License.
  */
 
-import React, { useEffect, useMemo } from 'react';
-import { matchRoutes, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { matchRoutes, useInRouterContext, useLocation } from 'react-router-dom';
 import {
   useAnalytics,
   AnalyticsContext,
-  CommonAnalyticsContext,
   RouteRef,
+  AnalyticsEventAttributes,
+  BackstagePlugin,
 } from '@backstage/core-plugin-api';
-import { routeObjectCollector } from './collectors';
-import {
-  childDiscoverer,
-  routeElementDiscoverer,
-  traverseElementTree,
-} from '../extensions/traversal';
 import { BackstageRouteObject } from './types';
 
 /**
@@ -37,38 +32,60 @@ import { BackstageRouteObject } from './types';
 const getExtensionContext = (
   pathname: string,
   routes: BackstageRouteObject[],
-): CommonAnalyticsContext | {} => {
+) => {
   try {
     // Find matching routes for the given path name.
-    const matches = matchRoutes(routes, { pathname }) as
-      | { route: BackstageRouteObject }[]
-      | null;
+    const matches = matchRoutes(routes, { pathname });
 
     // Of the matching routes, get the last (e.g. most specific) instance of
-    // the BackstageRouteObject.
-    const routeObject = matches
+    // the BackstageRouteObject that contains a routeRef. Filtering by routeRef
+    // ensures subRouteRefs are aligned to their parent routes' context.
+    const routeMatch = matches
       ?.filter(match => match?.route.routeRefs?.size > 0)
-      .pop()?.route;
+      .pop();
+    const routeObject = routeMatch?.route;
 
     // If there is no route object, then allow inheritance of default context.
     if (!routeObject) {
-      return {};
+      return undefined;
     }
 
-    // If there is a single route ref, return it.
-    // todo: get routeRef of rendered gathered mount point(?)
+    // If the matched route is the root route (no path), and the pathname is
+    // not the path of the homepage, then inherit from the default context.
+    if (routeObject.path === '' && pathname !== '/') {
+      return undefined;
+    }
+
+    // If there is a single route ref, use it.
     let routeRef: RouteRef | undefined;
     if (routeObject.routeRefs.size === 1) {
       routeRef = routeObject.routeRefs.values().next().value;
     }
 
+    // If there is a single plugin, use it.
+    let plugin: BackstagePlugin | undefined;
+    if (routeObject.plugins.size === 1) {
+      plugin = routeObject.plugins.values().next().value;
+    }
+
+    const params = Object.entries(
+      routeMatch?.params || {},
+    ).reduce<AnalyticsEventAttributes>((acc, [key, value]) => {
+      if (value !== undefined && key !== '*') {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
     return {
       extension: 'App',
-      pluginId: routeObject.plugin?.getId() || 'root',
+      pluginId: plugin?.getId() || 'root',
       ...(routeRef ? { routeRef: (routeRef as { id?: string }).id } : {}),
+      _routeNodeType: routeObject.element as string,
+      params,
     };
   } catch {
-    return {};
+    return undefined;
   }
 };
 
@@ -79,41 +96,75 @@ const TrackNavigation = ({
   pathname,
   search,
   hash,
+  attributes,
 }: {
   pathname: string;
   search: string;
   hash: string;
+  attributes?: AnalyticsEventAttributes;
 }) => {
   const analytics = useAnalytics();
-
   useEffect(() => {
-    analytics.captureEvent('navigate', `${pathname}${search}${hash}`);
-  }, [analytics, pathname, search, hash]);
+    analytics.captureEvent('navigate', `${pathname}${search}${hash}`, {
+      attributes,
+    });
+  }, [analytics, pathname, search, hash, attributes]);
 
   return null;
 };
 
 /**
- * Logs a "navigate" event with appropriate plugin-level analytics context
- * attributes each time the user navigates to a page.
+ * Reads the location being navigated to and reports it.
+ *
+ * Split out of {@link RouteTracker} so that `useLocation` is only ever called
+ * from a component that is mounted inside a router, where it cannot throw.
  */
-export const RouteTracker = ({ tree }: { tree: React.ReactNode }) => {
+const TrackRouterNavigation = ({
+  routeObjects,
+}: {
+  routeObjects: BackstageRouteObject[];
+}) => {
   const { pathname, search, hash } = useLocation();
-  // todo(iamEAP): Work this into the existing traversal and make the data
-  // available on the provider. Then grab from app instance on the router.
-  const { routeObjects } = useMemo(() => {
-    return traverseElementTree({
-      root: tree,
-      discoverers: [childDiscoverer, routeElementDiscoverer],
-      collectors: {
-        routeObjects: routeObjectCollector,
-      },
-    });
-  }, [tree]);
+
+  const { params, ...attributes } = getExtensionContext(
+    pathname,
+    routeObjects,
+  ) || { params: {} };
 
   return (
-    <AnalyticsContext attributes={getExtensionContext(pathname, routeObjects)}>
-      <TrackNavigation pathname={pathname} search={search} hash={hash} />
+    <AnalyticsContext attributes={attributes}>
+      <TrackNavigation
+        pathname={pathname}
+        search={search}
+        hash={hash}
+        attributes={params}
+      />
     </AnalyticsContext>
   );
+};
+
+/**
+ * Logs a "navigate" event with appropriate plugin-level analytics context
+ * attributes each time the user navigates to a page.
+ *
+ * App chrome is allowed to render with no ambient React Router at all — an app
+ * that supplies a passthrough `Router` component has none — and React Router's
+ * `useLocation` throws there. `useInRouterContext` is the probe React Router
+ * offers instead: it reads the very context `useLocation` reads and returns
+ * `false` rather than throwing. It is called unconditionally and the branch is
+ * on its value, so hook order is stable whether or not a router is present.
+ * Without one there is no location, and so no navigation to report.
+ */
+export const RouteTracker = ({
+  routeObjects,
+}: {
+  routeObjects: BackstageRouteObject[];
+}) => {
+  const inRouterContext = useInRouterContext();
+
+  if (!inRouterContext) {
+    return null;
+  }
+
+  return <TrackRouterNavigation routeObjects={routeObjects} />;
 };

@@ -13,103 +13,108 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { useApi as useApiMocked } from '@backstage/core-plugin-api';
-import { useEntityKinds as useEntityKindsMocked } from '@backstage/plugin-catalog-react';
-import { render, waitFor } from '@testing-library/react';
+
+import { renderWithEffects } from '@backstage/test-utils';
+import { mockApis, TestApiProvider } from '@backstage/frontend-test-utils';
+import { waitFor, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { SelectedKindsFilter } from './SelectedKindsFilter';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
 
-jest.mock('@backstage/core-plugin-api');
-jest.mock('@backstage/plugin-catalog-react');
-
-const useApi = useApiMocked as jest.Mock<ReturnType<typeof useApiMocked>>;
-const useEntityKinds = useEntityKindsMocked as jest.Mock<
-  ReturnType<typeof useEntityKindsMocked>
->;
+const catalogApi = catalogApiMock.mock({
+  getEntityFacets: jest.fn().mockResolvedValue({
+    facets: {
+      kind: [
+        { value: 'Component', count: 2 },
+        { value: 'System', count: 1 },
+        { value: 'API', count: 1 },
+        { value: 'Resource', count: 1 },
+      ],
+    },
+  }),
+});
+const apis = [
+  mockApis.alert(),
+  mockApis.translation(),
+  mockApis.error(),
+  catalogApi,
+] as const;
 
 describe('<SelectedKindsFilter/>', () => {
-  beforeEach(() => {
-    useApi.mockReturnValue({});
-    useEntityKinds.mockReturnValue({
-      loading: false,
-      kinds: ['API', 'Component', 'System', 'Domain', 'Resource'],
-      error: undefined,
-    });
-  });
-
-  afterEach(() => jest.resetAllMocks());
-
-  test('should not explode while loading', () => {
-    useEntityKinds.mockReturnValue({
-      loading: true,
-      kinds: undefined,
-      error: undefined,
-    });
-    const { baseElement } = render(
-      <SelectedKindsFilter value={['api', 'component']} onChange={() => {}} />,
+  it('should not explode while loading', async () => {
+    const { baseElement } = await renderWithEffects(
+      <TestApiProvider apis={apis}>
+        <SelectedKindsFilter value={['api', 'component']} onChange={() => {}} />
+      </TestApiProvider>,
     );
-
     expect(baseElement).toBeInTheDocument();
   });
 
-  test('should render current value', () => {
-    const { getByText } = render(
-      <SelectedKindsFilter value={['api', 'component']} onChange={() => {}} />,
+  it('should render current value', async () => {
+    await renderWithEffects(
+      <TestApiProvider apis={apis}>
+        <SelectedKindsFilter value={['api', 'component']} onChange={() => {}} />
+      </TestApiProvider>,
     );
 
-    expect(getByText('API')).toBeInTheDocument();
-    expect(getByText('Component')).toBeInTheDocument();
+    expect(screen.getByText('API')).toBeInTheDocument();
+    expect(screen.getByText('Component')).toBeInTheDocument();
   });
 
-  test('should select value', async () => {
+  it('should select value', async () => {
     const onChange = jest.fn();
-    const { getByText, getByLabelText } = render(
-      <SelectedKindsFilter value={['api', 'component']} onChange={onChange} />,
+    await renderWithEffects(
+      <TestApiProvider apis={apis}>
+        <SelectedKindsFilter value={['api', 'component']} onChange={onChange} />
+      </TestApiProvider>,
     );
 
-    userEvent.click(getByLabelText('Open'));
+    await userEvent.click(screen.getByLabelText('Open'));
+    await waitFor(() => expect(screen.getByText('System')).toBeInTheDocument());
 
-    await waitFor(() => expect(getByText('System')).toBeInTheDocument());
-
-    userEvent.click(getByText('System'));
+    await userEvent.click(screen.getByText('System'));
 
     await waitFor(() => {
-      expect(onChange).toBeCalledWith(['api', 'component', 'system']);
+      expect(onChange).toHaveBeenCalledWith(['api', 'component', 'system']);
     });
   });
 
-  test('should return undefined if all values are selected', async () => {
+  it('should return undefined if all values are selected', async () => {
     const onChange = jest.fn();
-    const { getByText, getByLabelText } = render(
-      <SelectedKindsFilter
-        value={['api', 'component', 'system', 'domain']}
-        onChange={onChange}
-      />,
+    await renderWithEffects(
+      <TestApiProvider apis={apis}>
+        <SelectedKindsFilter
+          value={['api', 'component', 'system', 'domain']}
+          onChange={onChange}
+        />
+      </TestApiProvider>,
+    );
+    await userEvent.click(screen.getByLabelText('Open'));
+
+    await waitFor(() =>
+      expect(screen.getByText('Resource')).toBeInTheDocument(),
     );
 
-    userEvent.click(getByLabelText('Open'));
-
-    await waitFor(() => expect(getByText('Resource')).toBeInTheDocument());
-
-    userEvent.click(getByText('Resource'));
+    await userEvent.click(screen.getByText('Resource'));
 
     await waitFor(() => {
-      expect(onChange).toBeCalledWith(undefined);
+      expect(onChange).toHaveBeenCalledWith(undefined);
     });
   });
 
-  test('should return all values when cleared', async () => {
+  it('should return all values when cleared', async () => {
     const onChange = jest.fn();
-    const { getByRole } = render(
-      <SelectedKindsFilter value={[]} onChange={onChange} />,
+    await renderWithEffects(
+      <TestApiProvider apis={apis}>
+        <SelectedKindsFilter value={[]} onChange={onChange} />
+      </TestApiProvider>,
     );
 
-    userEvent.click(getByRole('combobox'));
-    userEvent.tab();
+    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.tab();
 
     await waitFor(() => {
-      expect(onChange).toBeCalledWith(undefined);
+      expect(onChange).toHaveBeenCalledWith(undefined);
     });
   });
 });

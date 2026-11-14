@@ -15,6 +15,7 @@
  */
 
 import {
+  bitbucketAuthApiRef,
   createApiFactory,
   githubAuthApiRef,
   gitlabAuthApiRef,
@@ -35,6 +36,9 @@ type ScopeMapping = {
   repoWrite: string[];
 };
 
+// An enum of all supported providers
+type ProviderName = 'generic' | 'github' | 'azure' | 'bitbucket' | 'gitlab';
+
 class ScmAuthMux implements ScmAuthApi {
   #providers: Array<ScmAuth>;
 
@@ -49,7 +53,7 @@ class ScmAuthMux implements ScmAuthApi {
     const provider = this.#providers.find(p => p.isUrlSupported(url));
     if (!provider) {
       throw new Error(
-        `No authentication provider available for access to '${options.url}'`,
+        `No auth provider available for '${options.url}', see https://backstage.io/link?scm-auth`,
       );
     }
 
@@ -93,12 +97,14 @@ export class ScmAuth implements ScmAuthApi {
         github: githubAuthApiRef,
         gitlab: gitlabAuthApiRef,
         azure: microsoftAuthApiRef,
+        bitbucket: bitbucketAuthApiRef,
       },
-      factory: ({ github, gitlab, azure }) =>
+      factory: ({ github, gitlab, azure, bitbucket }) =>
         ScmAuth.merge(
           ScmAuth.forGithub(github),
           ScmAuth.forGitlab(gitlab),
           ScmAuth.forAzure(azure),
+          ScmAuth.forBitbucket(bitbucket),
         ),
     });
   }
@@ -116,7 +122,7 @@ export class ScmAuth implements ScmAuthApi {
       };
     },
   ): ScmAuth {
-    return new ScmAuth(authApi, options.host, options.scopeMapping);
+    return new ScmAuth('generic', authApi, options.host, options.scopeMapping);
   }
 
   /**
@@ -139,7 +145,7 @@ export class ScmAuth implements ScmAuthApi {
     },
   ): ScmAuth {
     const host = options?.host ?? 'github.com';
-    return new ScmAuth(githubAuthApi, host, {
+    return new ScmAuth('github', githubAuthApi, host, {
       default: ['repo', 'read:org', 'read:user'],
       repoWrite: ['gist'],
     });
@@ -165,7 +171,7 @@ export class ScmAuth implements ScmAuthApi {
     },
   ): ScmAuth {
     const host = options?.host ?? 'gitlab.com';
-    return new ScmAuth(gitlabAuthApi, host, {
+    return new ScmAuth('gitlab', gitlabAuthApi, host, {
       default: ['read_user', 'read_api', 'read_repository'],
       repoWrite: ['write_repository', 'api'],
     });
@@ -191,15 +197,15 @@ export class ScmAuth implements ScmAuthApi {
     },
   ): ScmAuth {
     const host = options?.host ?? 'dev.azure.com';
-    return new ScmAuth(microsoftAuthApi, host, {
+    return new ScmAuth('azure', microsoftAuthApi, host, {
       default: [
-        'vso.build',
-        'vso.code',
-        'vso.graph',
-        'vso.project',
-        'vso.profile',
+        '499b84ac-1321-427f-aa17-267ca6975798/vso.build',
+        '499b84ac-1321-427f-aa17-267ca6975798/vso.code',
+        '499b84ac-1321-427f-aa17-267ca6975798/vso.graph',
+        '499b84ac-1321-427f-aa17-267ca6975798/vso.project',
+        '499b84ac-1321-427f-aa17-267ca6975798/vso.profile',
       ],
-      repoWrite: ['vso.code_manage'],
+      repoWrite: ['499b84ac-1321-427f-aa17-267ca6975798/vso.code_manage'],
     });
   }
 
@@ -220,12 +226,61 @@ export class ScmAuth implements ScmAuthApi {
     bitbucketAuthApi: OAuthApi,
     options?: {
       host?: string;
+      scopeMapping?: {
+        default?: string[];
+        repoWrite?: string[];
+      };
     },
   ): ScmAuth {
     const host = options?.host ?? 'bitbucket.org';
-    return new ScmAuth(bitbucketAuthApi, host, {
-      default: ['account', 'team', 'pullrequest', 'snippet', 'issue'],
-      repoWrite: ['pullrequest:write', 'snippet:write', 'issue:write'],
+    const defaultScopes = options?.scopeMapping?.default ?? [
+      'account',
+      'team',
+      'pullrequest',
+      'snippet',
+      'issue',
+      'project',
+    ];
+    const repoWriteScopes = options?.scopeMapping?.repoWrite ?? [
+      'pullrequest:write',
+      'snippet:write',
+      'issue:write',
+    ];
+    return new ScmAuth('bitbucket', bitbucketAuthApi, host, {
+      default: defaultScopes,
+      repoWrite: repoWriteScopes,
+    });
+  }
+
+  /**
+   * Creates a new ScmAuth instance that handles authentication towards Bitbucket Server.
+   *
+   * The host option determines which URLs that are handled by this instance.
+   *
+   * The default scopes are:
+   *
+   * `PUBLIC_REPOS REPO_READ`
+   *
+   * If the additional `repoWrite` permission is requested, these scopes are added:
+   *
+   * `REPO_WRITE`
+   */
+  static forBitbucketServer(
+    bitbucketAuthApi: OAuthApi,
+    options: {
+      host: string;
+      scopeMapping?: {
+        default?: string[];
+        repoWrite?: string[];
+      };
+    },
+  ): ScmAuth {
+    return this.forBitbucket(bitbucketAuthApi, {
+      host: options.host,
+      scopeMapping: {
+        default: options.scopeMapping?.default ?? ['PUBLIC_REPOS', 'REPO_READ'],
+        repoWrite: options.scopeMapping?.repoWrite ?? ['REPO_WRITE'],
+      },
     });
   }
 
@@ -240,11 +295,18 @@ export class ScmAuth implements ScmAuthApi {
   #api: OAuthApi;
   #host: string;
   #scopeMapping: ScopeMapping;
+  #providerName: ProviderName;
 
-  private constructor(api: OAuthApi, host: string, scopeMapping: ScopeMapping) {
+  private constructor(
+    providerName: ProviderName,
+    api: OAuthApi,
+    host: string,
+    scopeMapping: ScopeMapping,
+  ) {
     this.#api = api;
     this.#host = host;
     this.#scopeMapping = scopeMapping;
+    this.#providerName = providerName;
   }
 
   /**
@@ -254,6 +316,19 @@ export class ScmAuth implements ScmAuthApi {
     return url.host === this.#host;
   }
 
+  private getAdditionalScopesForProvider(
+    additionalScopes: ScmAuthTokenOptions['additionalScope'],
+  ): string[] {
+    if (!additionalScopes?.customScopes || this.#providerName === 'generic') {
+      return [];
+    }
+
+    return additionalScopes.customScopes?.[this.#providerName] ?? [];
+  }
+
+  /**
+   * Fetches credentials for the given resource.
+   */
   async getCredentials(
     options: ScmAuthTokenOptions,
   ): Promise<ScmAuthTokenResponse> {
@@ -264,7 +339,17 @@ export class ScmAuth implements ScmAuthApi {
       scopes.push(...this.#scopeMapping.repoWrite);
     }
 
-    const token = await this.#api.getAccessToken(scopes, restOptions);
+    const additionalScopes =
+      this.getAdditionalScopesForProvider(additionalScope);
+
+    if (additionalScopes.length) {
+      scopes.push(...additionalScopes);
+    }
+
+    const uniqueScopes = [...new Set(scopes)];
+
+    const token = await this.#api.getAccessToken(uniqueScopes, restOptions);
+
     return {
       token,
       headers: {

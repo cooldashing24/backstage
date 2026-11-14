@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { isError, isErrorWithName } from './assertion';
 import { CustomErrorBase } from './CustomErrorBase';
 
 /*
@@ -32,21 +33,59 @@ import { CustomErrorBase } from './CustomErrorBase';
  *
  * @public
  */
-export class InputError extends CustomErrorBase {}
+export class InputError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is InputError {
+    return isErrorWithName(value, 'InputError');
+  }
+
+  name = 'InputError' as const;
+}
 
 /**
  * The request requires authentication, which was not properly supplied.
  *
  * @public
  */
-export class AuthenticationError extends CustomErrorBase {}
+export class AuthenticationError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   * A matching name is assumed to identify this error type.
+   *
+   * @example
+   * ```ts
+   * if (AuthenticationError.is(error)) {
+   *   console.log(error.message);
+   * }
+   * ```
+   */
+  static is(value: unknown): value is AuthenticationError {
+    return isErrorWithName(value, 'AuthenticationError');
+  }
+
+  name = 'AuthenticationError' as const;
+}
 
 /**
  * The authenticated caller is not allowed to perform this request.
  *
  * @public
  */
-export class NotAllowedError extends CustomErrorBase {}
+export class NotAllowedError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is NotAllowedError {
+    return isErrorWithName(value, 'NotAllowedError');
+  }
+
+  name = 'NotAllowedError' as const;
+}
 
 /**
  * The requested resource could not be found.
@@ -56,7 +95,17 @@ export class NotAllowedError extends CustomErrorBase {}
  *
  * @public
  */
-export class NotFoundError extends CustomErrorBase {}
+export class NotFoundError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is NotFoundError {
+    return isErrorWithName(value, 'NotFoundError');
+  }
+
+  name = 'NotFoundError' as const;
+}
 
 /**
  * The request could not complete due to a conflict in the current state of the
@@ -64,11 +113,83 @@ export class NotFoundError extends CustomErrorBase {}
  *
  * @public
  */
-export class ConflictError extends CustomErrorBase {}
+export class ConflictError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is ConflictError {
+    return isErrorWithName(value, 'ConflictError');
+  }
+
+  name = 'ConflictError' as const;
+}
 
 /**
  * The requested resource has not changed since last request.
  *
  * @public
  */
-export class NotModifiedError extends CustomErrorBase {}
+export class NotModifiedError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is NotModifiedError {
+    return isErrorWithName(value, 'NotModifiedError');
+  }
+
+  name = 'NotModifiedError' as const;
+}
+
+/**
+ * The server does not support the functionality required to fulfill the request.
+ *
+ * @public
+ */
+export class NotImplementedError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is NotImplementedError {
+    return isErrorWithName(value, 'NotImplementedError');
+  }
+
+  name = 'NotImplementedError' as const;
+}
+
+/**
+ * The server is not ready to handle the request.
+ *
+ * @public
+ */
+export class ServiceUnavailableError extends CustomErrorBase {
+  /**
+   * Checks the error name and basic shape, including an optional error cause.
+   * Works across package copies without requiring a shared constructor.
+   */
+  static is(value: unknown): value is ServiceUnavailableError {
+    return isErrorWithName(value, 'ServiceUnavailableError');
+  }
+
+  name = 'ServiceUnavailableError' as const;
+}
+
+/**
+ * An error that forwards an underlying cause with additional context in the message.
+ *
+ * The `name` property of the error will be inherited from the `cause` if
+ * possible, and will otherwise be set to `'Error'`. A forwarded
+ * {@link AuthenticationError} therefore still matches `AuthenticationError.is`.
+ * This class has no `is` guard because it has no fixed error name.
+ *
+ * @public
+ */
+export class ForwardedError extends CustomErrorBase {
+  constructor(message: string, cause: Error | unknown) {
+    super(message, cause);
+
+    this.name = isError(cause) ? cause.name : 'Error';
+  }
+}

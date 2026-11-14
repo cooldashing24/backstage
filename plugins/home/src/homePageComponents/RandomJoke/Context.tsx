@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-import React, { createContext } from 'react';
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useContext,
+  createContext,
+} from 'react';
 
 export type JokeType = 'any' | 'programming';
 
@@ -42,23 +48,22 @@ const getNewJoke = (type: string): Promise<Joke> =>
     .then(res => res.json())
     .then(data => (Array.isArray(data) ? data[0] : data));
 
-export const ContextProvider = ({
-  children,
-  defaultCategory,
-}: {
+export const ContextProvider = (props: {
   children: JSX.Element;
   defaultCategory?: JokeType;
 }) => {
-  const [loading, setLoading] = React.useState(true);
-  const [joke, setJoke] = React.useState<Joke>({
+  const { children, defaultCategory } = props;
+
+  const [loading, setLoading] = useState(true);
+  const [joke, setJoke] = useState<Joke>({
     setup: '',
     punchline: '',
   });
-  const [type, setType] = React.useState<JokeType>(
+  const [type, setType] = useState<JokeType>(
     defaultCategory || ('programming' as JokeType),
   );
 
-  const rerollJoke = React.useCallback(() => {
+  const rerollJoke = useCallback(() => {
     setLoading(true);
     getNewJoke(type).then(newJoke => setJoke(newJoke));
   }, [type]);
@@ -67,11 +72,11 @@ export const ContextProvider = ({
     setType(newType);
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     setLoading(false);
   }, [joke]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     rerollJoke();
   }, [rerollJoke]);
 
@@ -87,7 +92,7 @@ export const ContextProvider = ({
 };
 
 export const useRandomJoke = () => {
-  const value = React.useContext(Context);
+  const value = useContext(Context);
 
   if (value === undefined) {
     throw new Error('useRandomJoke must be used within a RandomJokeProvider');

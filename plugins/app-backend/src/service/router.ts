@@ -14,21 +14,56 @@
  * limitations under the License.
  */
 
-import { notFoundHandler, resolvePackagePath } from '@backstage/backend-common';
-import { Config } from '@backstage/config';
-import express from 'express';
+import {
+  DatabaseService,
+  resolvePackagePath,
+  resolveSafeChildPath,
+  RootConfigService,
+} from '@backstage/backend-plugin-api';
+import type { AppConfig } from '@backstage/config';
+import helmet from 'helmet';
+import express, { Request, Response } from 'express';
 import Router from 'express-promise-router';
 import fs from 'fs-extra';
-import { resolve as resolvePath } from 'path';
-import { Logger } from 'winston';
-import { injectConfig, readConfigs } from '../lib/config';
+import { resolve as resolvePath } from 'node:path';
+import {
+  createStaticAssetMiddleware,
+  findStaticAssets,
+  StaticAssetsStore,
+} from '../lib/assets';
+import {
+  CACHE_CONTROL_MAX_CACHE,
+  CACHE_CONTROL_NO_CACHE,
+  CACHE_CONTROL_REVALIDATE_CACHE,
+} from '../lib/headers';
+import type { ConfigSchema } from '@backstage/config-loader';
+import {
+  AuthService,
+  HttpAuthService,
+  LoggerService,
+} from '@backstage/backend-plugin-api';
+import { AuthenticationError, InputError } from '@backstage/errors';
+import { injectConfig, readFrontendConfig } from '../lib/config';
+import { filterPublicConfig } from '../lib/config/filterPublicConfig';
 
 // express uses mime v1 while we only have types for mime v2
 type Mime = { lookup(arg0: string): string };
 
+/**
+ * @internal
+ */
 export interface RouterOptions {
-  config: Config;
-  logger: Logger;
+  config: RootConfigService;
+  logger: LoggerService;
+  auth: AuthService;
+  httpAuth: HttpAuthService;
+
+  /**
+   * If a database is provided it will be used to cache previously deployed static assets.
+   *
+   * This is a built-in alternative to using a `staticFallbackHandler`.
+   */
+  database: DatabaseService;
 
   /**
    * The name of the app package that content should be served from. The same app package should be
@@ -44,81 +79,317 @@ export interface RouterOptions {
    * This can be used to avoid issues with clients on older deployment versions trying to access lazy
    * loaded content that is no longer present. Typically the requests would fall back to a long-term
    * object store where all recently deployed versions of the app are present.
+   *
+   * Another option is to provide a `database` that will take care of storing the static assets instead.
+   *
+   * If both `database` and `staticFallbackHandler` are provided, the `database` will attempt to serve
+   * static assets first, and if they are not found, the `staticFallbackHandler` will be called.
    */
   staticFallbackHandler?: express.Handler;
 
   /**
-   * Disables the configuration injection. This can be useful if you're running in an environment
-   * with a read-only filesystem, or for some other reason don't want configuration to be injected.
    *
-   * Note that this will cause the configuration used when building the app bundle to be used, unless
-   * a separate configuration loading strategy is set up.
+   * Provides a ConfigSchema.
    *
-   * This also disables configuration injection though `APP_CONFIG_` environment variables.
    */
-  disableConfigInjection?: boolean;
+  schema?: ConfigSchema;
 }
 
+/**
+ * @internal
+ */
 export async function createRouter(
   options: RouterOptions,
 ): Promise<express.Router> {
-  const { config, logger, appPackageName, staticFallbackHandler } = options;
+  const {
+    config,
+    logger,
+    appPackageName,
+    staticFallbackHandler,
+    auth,
+    httpAuth,
+    schema,
+  } = options;
+
+  const disableConfigInjection = config.getOptionalBoolean(
+    'app.disableConfigInjection',
+  );
+  const disableStaticFallbackCache = config.getOptionalBoolean(
+    'app.disableStaticFallbackCache',
+  );
 
   const appDistDir = resolvePackagePath(appPackageName, 'dist');
   const staticDir = resolvePath(appDistDir, 'static');
 
   if (!(await fs.pathExists(staticDir))) {
-    logger.warn(
-      `Can't serve static app content from ${staticDir}, directory doesn't exist`,
-    );
+    if (process.env.NODE_ENV === 'production') {
+      logger.error(
+        `Can't serve static app content from ${staticDir}, directory doesn't exist`,
+      );
+    }
 
     return Router();
   }
 
   logger.info(`Serving static app content from ${appDistDir}`);
 
-  if (!options.disableConfigInjection) {
-    const appConfigs = await readConfigs({
-      config,
-      appDistDir,
-      env: process.env,
+  const appConfigs = disableConfigInjection
+    ? undefined
+    : await readFrontendConfig({
+        config,
+        appDistDir,
+        env: process.env,
+        schema,
+      });
+
+  const assetStore = !disableStaticFallbackCache
+    ? await StaticAssetsStore.create({
+        logger,
+        database: options.database,
+      })
+    : undefined;
+
+  const router = Router();
+
+  router.use(helmet.frameguard({ action: 'deny' }));
+
+  const publicDistDir = resolvePath(appDistDir, 'public');
+
+  const disablePublicEntryPoint = config.getOptionalBoolean(
+    'app.disablePublicEntryPoint',
+  );
+  const enablePublicEntryPoint =
+    !disablePublicEntryPoint && (await fs.pathExists(publicDistDir));
+
+  if (enablePublicEntryPoint) {
+    logger.info(
+      `App is running in protected mode, serving public content from ${publicDistDir}`,
+    );
+
+    const publicRouter = Router();
+
+    const getRequestCredentials = async (
+      req: express.Request,
+      res: express.Response,
+    ) => {
+      try {
+        return await httpAuth.credentials(req, {
+          allow: ['user', 'service', 'none'],
+          allowLimitedAccess: true,
+        });
+      } catch {
+        // If we fail to authenticate, make sure the session cookie is cleared
+        // and continue as unauthenticated. If the user is logged in they will
+        // immediately be redirected back to the protected app via the POST.
+        const credentials = await auth.getNoneCredentials();
+        await httpAuth.issueUserCookie(res, {
+          credentials,
+        });
+        return credentials;
+      }
+    };
+
+    // Handle sign-in before checking the existing session cookie so repeated
+    // handoffs remain idempotent for users that are already authenticated.
+    publicRouter.post(
+      '*',
+      express.urlencoded({ extended: true }),
+      async (req, res, next) => {
+        if (req.body.type === 'sign-in') {
+          const existingCredentials = await getRequestCredentials(req, res);
+
+          if (auth.isPrincipal(existingCredentials, 'service')) {
+            next('router');
+            return;
+          }
+
+          const credentials = await auth.authenticate(req.body.token);
+
+          if (!auth.isPrincipal(credentials, 'user')) {
+            throw new AuthenticationError('Invalid token, not a user');
+          }
+
+          if (
+            auth.isPrincipal(existingCredentials, 'user') &&
+            existingCredentials.principal.userEntityRef !==
+              credentials.principal.userEntityRef
+          ) {
+            throw new AuthenticationError(
+              'Refused to replace an existing authenticated session',
+            );
+          }
+
+          await httpAuth.issueUserCookie(res, {
+            credentials,
+          });
+
+          // Resume as if it was a GET request towards the outer protected router, serving index.html
+          req.method = 'GET';
+          next('router');
+        } else {
+          throw new InputError(
+            'Invalid POST request to app-backend wildcard endpoint',
+          );
+        }
+      },
+    );
+
+    publicRouter.use(async (req, res, next) => {
+      const credentials = await getRequestCredentials(req, res);
+
+      if (credentials.principal.type === 'none') {
+        next();
+      } else {
+        next('router');
+      }
     });
 
-    await injectConfig({ appConfigs, logger, staticDir });
+    publicRouter.use(
+      await createEntryPointRouter({
+        logger: logger.child({ entry: 'public' }),
+        rootDir: publicDistDir,
+        assetStore: assetStore?.withNamespace('public'),
+        appConfigs,
+        configFilter: configs => filterPublicConfig(configs, config),
+      }),
+    );
+
+    router.use(publicRouter);
   }
+
+  router.use(
+    await createEntryPointRouter({
+      logger: logger.child({ entry: 'main' }),
+      rootDir: appDistDir,
+      assetStore,
+      staticFallbackHandler,
+      appConfigs,
+    }),
+  );
+
+  return router;
+}
+
+async function createEntryPointRouter({
+  logger,
+  rootDir,
+  assetStore,
+  staticFallbackHandler,
+  appConfigs,
+  configFilter,
+}: {
+  logger: LoggerService;
+  rootDir: string;
+  assetStore?: StaticAssetsStore;
+  staticFallbackHandler?: express.Handler;
+  appConfigs?: AppConfig[];
+  configFilter?: (appConfigs: AppConfig[]) => AppConfig[];
+}) {
+  const staticDir = resolvePath(rootDir, 'static');
+
+  const injectResult =
+    appConfigs &&
+    (await injectConfig({
+      appConfigs,
+      logger,
+      rootDir,
+      staticDir,
+      configFilter,
+    }));
 
   const router = Router();
 
   // Use a separate router for static content so that a fallback can be provided by backend
   const staticRouter = Router();
-  staticRouter.use(express.static(resolvePath(appDistDir, 'static')));
+  staticRouter.use(
+    express.static(staticDir, {
+      setHeaders: (res, path) => {
+        if (injectResult?.injectedPath === path) {
+          res.setHeader('Cache-Control', CACHE_CONTROL_REVALIDATE_CACHE);
+        } else {
+          res.setHeader('Cache-Control', CACHE_CONTROL_MAX_CACHE);
+        }
+      },
+    }),
+  );
+
+  if (assetStore) {
+    const assets = await findStaticAssets(staticDir);
+    await assetStore.storeAssets(assets);
+    // Remove any assets that are older than 7 days
+    await assetStore.trimAssets({ maxAgeSeconds: 60 * 60 * 24 * 7 });
+
+    staticRouter.use(createStaticAssetMiddleware(assetStore));
+  }
+
   if (staticFallbackHandler) {
     staticRouter.use(staticFallbackHandler);
   }
-  staticRouter.use(notFoundHandler());
+  staticRouter.use((_req: Request, res: Response) => {
+    res.status(404).end();
+  });
 
   router.use('/static', staticRouter);
-  router.use(
-    express.static(appDistDir, {
+
+  const rootRouter = Router();
+  rootRouter.use(async (req, _res, next) => {
+    // Make sure / and /index.html are handled by the HTML5 route below.
+    let isIndex = req.path === '/' || req.path === '/index.html';
+    if (injectResult?.indexHtmlContent && !isIndex) {
+      try {
+        const path = resolveSafeChildPath(
+          rootDir,
+          `.${decodeURIComponent(req.path).replaceAll('\\', '/')}`,
+        );
+        const [file, index] = await Promise.all([
+          fs.stat(path),
+          fs.stat(resolvePath(rootDir, 'index.html')),
+        ]);
+        const candidate = file.isDirectory()
+          ? await fs.stat(resolvePath(path, 'index.html'))
+          : file;
+        // Every alias of the built index must use the injected HTML as well.
+        isIndex = candidate.dev === index.dev && candidate.ino === index.ino;
+      } catch {
+        // Let express.static handle missing files, invalid paths, and malformed URL encoding.
+      }
+    }
+    if (isIndex) {
+      next('router');
+    } else {
+      next();
+    }
+  });
+  rootRouter.use(
+    express.static(rootDir, {
       setHeaders: (res, path) => {
         // The Cache-Control header instructs the browser to not cache html files since it might
         // link to static assets from recently deployed versions.
         if (
           (express.static.mime as unknown as Mime).lookup(path) === 'text/html'
         ) {
-          res.setHeader('Cache-Control', 'no-store, max-age=0');
+          res.setHeader('Cache-Control', CACHE_CONTROL_NO_CACHE);
         }
       },
     }),
   );
+  router.use(rootRouter);
+
+  // HTML5 routing
   router.get('/*', (_req, res) => {
-    res.sendFile(resolvePath(appDistDir, 'index.html'), {
-      headers: {
-        // The Cache-Control header instructs the browser to not cache the index.html since it might
-        // link to static assets from recently deployed versions.
-        'cache-control': 'no-store, max-age=0',
-      },
-    });
+    if (injectResult?.indexHtmlContent) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', CACHE_CONTROL_NO_CACHE);
+      res.send(injectResult.indexHtmlContent);
+    } else {
+      res.sendFile(resolvePath(rootDir, 'index.html'), {
+        headers: {
+          // The Cache-Control header instructs the browser to not cache the index.html since it might
+          // link to static assets from recently deployed versions.
+          'cache-control': CACHE_CONTROL_NO_CACHE,
+        },
+      });
+    }
   });
 
   return router;

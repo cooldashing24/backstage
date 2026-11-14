@@ -15,10 +15,12 @@
  */
 
 /**
- * A Backstage catalog backend modules that helps integrate towards Microsoft Graph
+ * A Backstage catalog backend module that helps integrate towards Microsoft Graph
  *
  * @packageDocumentation
  */
 
-export * from './processors';
+export { default } from './module';
+export * from './module';
 export * from './microsoftGraph';
+export * from './processors';

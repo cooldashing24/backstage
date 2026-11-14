@@ -14,57 +14,38 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { Grid, Button, Typography } from '@material-ui/core';
-import { makeStyles } from '@material-ui/core/styles';
-import { BackstageTheme } from '@backstage/theme';
-
+import { Box, ButtonLink, Flex, Text } from '@backstage/ui';
 import { Illo } from './Illo';
+import { catalogTranslationRef } from '../../alpha/translation';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
+import styles from './EntityNotFound.module.css';
 
-const useStyles = makeStyles<BackstageTheme>(theme => ({
-  container: {
-    paddingTop: theme.spacing(24),
-    paddingLeft: theme.spacing(8),
-    [theme.breakpoints.down('xs')]: {
-      padding: theme.spacing(2),
-    },
-  },
-  title: {
-    paddingBottom: theme.spacing(2),
-    [theme.breakpoints.down('xs')]: {
-      fontSize: 32,
-    },
-  },
-  body: {
-    paddingBottom: theme.spacing(6),
-    [theme.breakpoints.down('xs')]: {
-      paddingBottom: theme.spacing(5),
-    },
-  },
-}));
-
-export const EntityNotFound = () => {
-  const classes = useStyles();
+export function EntityNotFound() {
+  const { t } = useTranslationRef(catalogTranslationRef);
 
   return (
-    <Grid container spacing={0} className={classes.container}>
+    <Flex gap="0" className={styles.container}>
       <Illo />
-      <Grid item xs={12} sm={6}>
-        <Typography variant="h2" className={classes.title}>
-          Entity was not found
-        </Typography>
-        <Typography variant="body1" className={classes.body}>
-          Want to help us build this? Check out our Getting Started
-          documentation.
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
+      <Box className={styles.content}>
+        <Text
+          as="h2"
+          variant="title-large"
+          weight="bold"
+          className={styles.title}
+        >
+          {t('entityNotFound.title')}
+        </Text>
+        <Text as="p" variant="body-large" className={styles.body}>
+          {t('entityNotFound.description')}
+        </Text>
+        <ButtonLink
+          variant="primary"
+          size="medium"
           href="https://backstage.io/docs"
         >
-          DOCS
-        </Button>
-      </Grid>
-    </Grid>
+          {t('entityNotFound.docButtonTitle')}
+        </ButtonLink>
+      </Box>
+    </Flex>
   );
-};
+}

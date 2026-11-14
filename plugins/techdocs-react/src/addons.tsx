@@ -1,0 +1,168 @@
+/*
+ * Copyright 2022 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { PropsWithChildren, ComponentType, Suspense, useCallback } from 'react';
+import { useOutlet } from 'react-router-dom';
+
+import {
+  attachComponentData,
+  createReactExtension,
+  ElementCollection,
+  Extension,
+  useElementFilter,
+} from '@backstage/core-plugin-api';
+
+import { TechDocsAddonLocations, TechDocsAddonOptions } from './types';
+
+/**
+ * Key for each addon.
+ * @public
+ */
+export const TECHDOCS_ADDONS_KEY = 'techdocs.addons.addon.v1';
+
+/**
+ * Marks the `<TechDocsAddons>` registry component.
+ * @public
+ */
+export const TECHDOCS_ADDONS_WRAPPER_KEY = 'techdocs.addons.wrapper.v1';
+
+/**
+ * TechDocs Addon registry.
+ * @public
+ */
+export const TechDocsAddons: ComponentType<PropsWithChildren<{}>> = () => null;
+
+attachComponentData(TechDocsAddons, TECHDOCS_ADDONS_WRAPPER_KEY, true);
+
+export const getDataKeyByName = (name: string) => {
+  return `${TECHDOCS_ADDONS_KEY}.${name.toLowerCase()}`;
+};
+
+/**
+ * Create a TechDocs addon overload signature without props.
+ * @public
+ */
+export function createTechDocsAddonExtension(
+  options: TechDocsAddonOptions,
+): Extension<() => JSX.Element | null>;
+
+/**
+ * Create a TechDocs addon overload signature with props.
+ * @public
+ */
+export function createTechDocsAddonExtension<TComponentProps>(
+  options: TechDocsAddonOptions<TComponentProps>,
+): Extension<(props: TComponentProps) => JSX.Element | null>;
+
+/**
+ * Create a TechDocs addon implementation.
+ * @public
+ */
+export function createTechDocsAddonExtension<
+  TComponentProps extends PropsWithChildren<{}>,
+>(
+  options: TechDocsAddonOptions<TComponentProps>,
+): Extension<(props: TComponentProps) => JSX.Element | null> {
+  const { name, component: TechDocsAddon } = options;
+  return createReactExtension({
+    name,
+    component: {
+      sync: (props: TComponentProps) => <TechDocsAddon {...props} />,
+    },
+    data: {
+      [TECHDOCS_ADDONS_KEY]: options,
+      [getDataKeyByName(name)]: true,
+    },
+  });
+}
+
+const getTechDocsAddonByName = (
+  collection: ElementCollection,
+  key: string,
+): JSX.Element | undefined => {
+  return collection.selectByComponentData({ key }).getElements()[0];
+};
+
+const getAllTechDocsAddons = (collection: ElementCollection) => {
+  return collection
+    .selectByComponentData({
+      key: TECHDOCS_ADDONS_WRAPPER_KEY,
+    })
+    .selectByComponentData({
+      key: TECHDOCS_ADDONS_KEY,
+    });
+};
+
+const getAllTechDocsAddonsData = (collection: ElementCollection) => {
+  return collection
+    .selectByComponentData({
+      key: TECHDOCS_ADDONS_WRAPPER_KEY,
+    })
+    .findComponentData<TechDocsAddonOptions>({
+      key: TECHDOCS_ADDONS_KEY,
+    });
+};
+
+/**
+ * Hook to use addons in components.
+ *
+ * Addons rendered through this hook are isolated in individual Suspense
+ * boundaries with no fallback, so a suspended addon does not hide the reader
+ * or sibling addons while it loads.
+ *
+ * @public
+ */
+export const useTechDocsAddons = () => {
+  const node = useOutlet();
+  const collection = useElementFilter(node, getAllTechDocsAddons);
+  const options = useElementFilter(node, getAllTechDocsAddonsData);
+
+  const findAddonByData = useCallback(
+    (data: TechDocsAddonOptions | undefined) => {
+      if (!collection || !data) return null;
+      const nameKey = getDataKeyByName(data.name);
+      return getTechDocsAddonByName(collection, nameKey) ?? null;
+    },
+    [collection],
+  );
+
+  const renderComponentByName = useCallback(
+    (name: string): JSX.Element | null => {
+      const data = options.find(option => option.name === name);
+      const addon = data ? findAddonByData(data) : null;
+      return addon ? <Suspense fallback={null}>{addon}</Suspense> : null;
+    },
+    [options, findAddonByData],
+  );
+
+  const renderComponentsByLocation = useCallback(
+    (
+      location: keyof typeof TechDocsAddonLocations,
+    ): (JSX.Element | null)[] | null => {
+      const data = options.filter(option => option.location === location);
+      return data.length
+        ? data.map(option => (
+            <Suspense key={option.name} fallback={null}>
+              {findAddonByData(option)}
+            </Suspense>
+          ))
+        : null;
+    },
+    [options, findAddonByData],
+  );
+
+  return { renderComponentByName, renderComponentsByLocation };
+};

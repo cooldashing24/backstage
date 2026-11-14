@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { Tabs, Tab } from '@material-ui/core';
+import { useState } from 'react';
+import Tabs from '@material-ui/core/Tabs';
+import Tab from '@material-ui/core/Tab';
 import { InfoCard } from '@backstage/core-components';
 
 type TabType = {
@@ -23,14 +24,10 @@ type TabType = {
   Component: () => JSX.Element;
 };
 
-export const ComponentTabs = ({
-  title,
-  tabs,
-}: {
-  title: string;
-  tabs: TabType[];
-}) => {
-  const [value, setValue] = React.useState(0);
+export const ComponentTabs = (props: { title: string; tabs: TabType[] }) => {
+  const { title, tabs } = props;
+
+  const [value, setValue] = useState(0);
 
   const handleChange = (_event: any, newValue: number) => {
     setValue(newValue);
@@ -44,7 +41,10 @@ export const ComponentTabs = ({
         ))}
       </Tabs>
       {tabs.map(({ Component }, idx) => (
-        <div {...(idx === value ? { style: { display: 'none' } } : {})}>
+        <div
+          key={idx}
+          {...(idx !== value ? { style: { display: 'none' } } : {})}
+        >
           <Component />
         </div>
       ))}

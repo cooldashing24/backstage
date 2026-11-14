@@ -13,24 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { BackstageTheme } from '@backstage/theme';
-import {
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  Grid,
-  makeStyles,
-  Typography,
-  darken,
-  lighten,
-} from '@material-ui/core';
+
+import { makeStyles, darken, lighten, Theme } from '@material-ui/core/styles';
+import Accordion from '@material-ui/core/Accordion';
+import AccordionSummary from '@material-ui/core/AccordionSummary';
+import AccordionDetails from '@material-ui/core/AccordionDetails';
+import Grid from '@material-ui/core/Grid';
+import Typography from '@material-ui/core/Typography';
 import ErrorOutline from '@material-ui/icons/ErrorOutline';
 import ExpandMoreIcon from '@material-ui/icons/ExpandMore';
-import React from 'react';
+import { ReactNode } from 'react';
+import { MarkdownContent } from '../MarkdownContent';
 
 const getWarningTextColor = (
   severity: NonNullable<WarningProps['severity']>,
-  theme: BackstageTheme,
+  theme: Theme,
 ) => {
   const getColor = theme.palette.type === 'light' ? darken : lighten;
   return getColor(theme.palette[severity].light, 0.6);
@@ -38,13 +35,13 @@ const getWarningTextColor = (
 
 const getWarningBackgroundColor = (
   severity: NonNullable<WarningProps['severity']>,
-  theme: BackstageTheme,
+  theme: Theme,
 ) => {
   const getBackgroundColor = theme.palette.type === 'light' ? lighten : darken;
   return getBackgroundColor(theme.palette[severity].light, 0.9);
 };
 
-const useErrorOutlineStyles = makeStyles<BackstageTheme>(theme => ({
+const useErrorOutlineStyles = makeStyles(theme => ({
   root: {
     marginRight: theme.spacing(1),
     fill: ({ severity }: WarningProps) =>
@@ -71,7 +68,7 @@ export type WarningPanelClassKey =
   | 'message'
   | 'details';
 
-const useStyles = makeStyles<BackstageTheme>(
+const useStyles = makeStyles(
   theme => ({
     panel: {
       backgroundColor: ({ severity }: WarningProps) =>
@@ -96,7 +93,13 @@ const useStyles = makeStyles<BackstageTheme>(
           severity as NonNullable<WarningProps['severity']>,
           theme,
         ),
-      fontWeight: 'bold',
+      fontWeight: theme.typography.fontWeightBold,
+    },
+    markdownContent: {
+      wordBreak: 'break-word',
+      '& p': {
+        display: 'inline',
+      },
     },
     message: {
       width: '100%',
@@ -128,29 +131,35 @@ const useStyles = makeStyles<BackstageTheme>(
 export type WarningProps = {
   title?: string;
   severity?: 'warning' | 'error' | 'info';
-  message?: React.ReactNode;
+  titleFormat?: string;
+  message?: ReactNode;
   defaultExpanded?: boolean;
-  children?: React.ReactNode;
+  children?: ReactNode;
 };
 
 const capitalize = (s: string) => {
-  return s.charAt(0).toLocaleUpperCase('en-US') + s.slice(1);
+  return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
 /**
- * WarningPanel. Show a user friendly error message to a user similar to ErrorPanel except that the warning panel
- * only shows the warning message to the user.
+ * Show a user friendly error message to a user similar to
+ * ErrorPanel except that the warning panel only shows the warning message to
+ * the user.
  *
- * @param {string} [severity=warning] Ability to change the severity of the alert.
- * @param {string} [title] A title for the warning. If not supplied, "Warning" will be used.
- * @param {Object} [message] Optional more detailed user-friendly message elaborating on the cause of the error.
- * @param {Object} [children] Objects to provide context, such as a stack trace or detailed error reporting.
- * Will be available inside an unfolded accordion.
+ * @param severity - Ability to change the severity of the alert. Default value
+ *        "warning"
+ * @param title - A title for the warning. If not supplied, "Warning" will be
+ *        used.
+ * @param message - Optional more detailed user-friendly message elaborating on
+ *        the cause of the error.
+ * @param children - Objects to provide context, such as a stack trace or detailed
+ *        error reporting. Will be available inside an unfolded accordion.
  */
 export function WarningPanel(props: WarningProps) {
   const {
     severity = 'warning',
     title,
+    titleFormat,
     message,
     children,
     defaultExpanded,
@@ -172,7 +181,14 @@ export function WarningPanel(props: WarningProps) {
       >
         <ErrorOutlineStyled severity={severity} />
         <Typography className={classes.summaryText} variant="subtitle1">
-          {subTitle}
+          {titleFormat === 'markdown' ? (
+            <MarkdownContent
+              content={subTitle}
+              className={classes.markdownContent}
+            />
+          ) : (
+            subTitle
+          )}
         </Typography>
       </AccordionSummary>
       {(message || children) && (

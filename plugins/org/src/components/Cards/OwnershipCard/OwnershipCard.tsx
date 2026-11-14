@@ -14,204 +14,82 @@
  * limitations under the License.
  */
 
-import { Entity } from '@backstage/catalog-model';
-import {
-  InfoCard,
-  InfoCardVariants,
-  Link,
-  Progress,
-  ResponseErrorPanel,
-} from '@backstage/core-components';
-import { useApi, useRouteRef } from '@backstage/core-plugin-api';
-import {
-  catalogApiRef,
-  catalogRouteRef,
-  formatEntityRefTitle,
-  isOwnerOf,
-  useEntity,
-} from '@backstage/plugin-catalog-react';
-import { BackstageTheme } from '@backstage/theme';
-import {
-  Box,
-  createStyles,
-  Grid,
-  makeStyles,
-  Typography,
-} from '@material-ui/core';
-import qs from 'qs';
-import React from 'react';
-import { useAsync } from 'react-use';
+import { EntityInfoCard, useEntity } from '@backstage/plugin-catalog-react';
+import { Switch } from '@backstage/ui';
+import { createStyles, makeStyles } from '@material-ui/core/styles';
+import { useEffect, useState } from 'react';
+import { ComponentsGrid } from './ComponentsGrid';
+import { EntityRelationAggregation } from '../types';
+import { useTranslationRef } from '@backstage/frontend-plugin-api';
+import { orgTranslationRef } from '../../../translation';
 
-type EntityTypeProps = {
-  kind: string;
-  type: string;
-  count: number;
-};
+/** @public */
+export type OwnershipCardClassKey = 'grid';
 
-const useStyles = makeStyles((theme: BackstageTheme) =>
-  createStyles({
-    card: {
-      border: `1px solid ${theme.palette.divider}`,
-      boxShadow: theme.shadows[2],
-      borderRadius: '4px',
-      padding: theme.spacing(2),
-      color: '#fff',
-      transition: `${theme.transitions.duration.standard}ms`,
-      '&:hover': {
-        boxShadow: theme.shadows[4],
+const useStyles = makeStyles(
+  () =>
+    createStyles({
+      grid: {
+        overflowY: 'auto',
+        marginTop: 0,
       },
-    },
-    bold: {
-      fontWeight: theme.typography.fontWeightBold,
-    },
-    entityTypeBox: {
-      background: (props: { type: string }) =>
-        theme.getPageTheme({ themeId: props.type }).backgroundImage,
-    },
-  }),
+    }),
+  {
+    name: 'PluginOrgOwnershipCard',
+  },
 );
 
-const EntityCountTile = ({
-  counter,
-  type,
-  name,
-  url,
-}: {
-  counter: number;
-  type: string;
-  name: string;
-  url: string;
+/** @public */
+export const OwnershipCard = (props: {
+  entityFilterKind?: string[];
+  hideRelationsToggle?: boolean;
+  /** @deprecated Please use relationAggregation instead */
+  relationsType?: EntityRelationAggregation;
+  relationAggregation?: EntityRelationAggregation;
+  entityLimit?: number;
 }) => {
-  const classes = useStyles({ type });
-
-  return (
-    <Link to={url} variant="body2">
-      <Box
-        className={`${classes.card} ${classes.entityTypeBox}`}
-        display="flex"
-        flexDirection="column"
-        alignItems="center"
-      >
-        <Typography className={classes.bold} variant="h6">
-          {counter}
-        </Typography>
-        <Typography className={classes.bold} variant="h6">
-          {name}
-        </Typography>
-      </Box>
-    </Link>
-  );
-};
-
-const getQueryParams = (
-  owner: Entity,
-  selectedEntity: EntityTypeProps,
-): string => {
-  const ownerName = formatEntityRefTitle(owner, { defaultKind: 'group' });
-  const { kind, type } = selectedEntity;
-  const queryParams = qs.stringify({
-    filters: {
-      kind,
-      type,
-      owners: ownerName,
-      user: 'all',
-    },
-  });
-
-  return queryParams;
-};
-
-export const OwnershipCard = ({
-  variant,
-}: {
-  /** @deprecated The entity is now grabbed from context instead */
-  entity?: Entity;
-  variant?: InfoCardVariants;
-}) => {
+  const { entityFilterKind, hideRelationsToggle, entityLimit = 6 } = props;
+  const relationAggregation = props.relationAggregation ?? props.relationsType;
+  const relationsToggle =
+    hideRelationsToggle === undefined ? false : hideRelationsToggle;
+  const classes = useStyles();
   const { entity } = useEntity();
-  const catalogApi = useApi(catalogApiRef);
-  const catalogLink = useRouteRef(catalogRouteRef);
+  const { t } = useTranslationRef(orgTranslationRef);
 
-  const {
-    loading,
-    error,
-    value: componentsWithCounters,
-  } = useAsync(async () => {
-    const kinds = ['Component', 'API'];
-    const entitiesList = await catalogApi.getEntities({
-      filter: {
-        kind: kinds,
-      },
-      fields: [
-        'kind',
-        'metadata.name',
-        'metadata.namespace',
-        'spec.type',
-        'relations',
-      ],
-    });
+  const defaultRelationAggregation =
+    entity.kind === 'User' ? 'aggregated' : 'direct';
+  const [getRelationAggregation, setRelationAggregation] = useState(
+    relationAggregation ?? defaultRelationAggregation,
+  );
 
-    const ownedEntitiesList = entitiesList.items.filter(component =>
-      isOwnerOf(entity, component),
-    );
-
-    const counts = ownedEntitiesList.reduce(
-      (acc: EntityTypeProps[], ownedEntity) => {
-        if (typeof ownedEntity.spec?.type !== 'string') return acc;
-
-        const match = acc.find(
-          x => x.kind === ownedEntity.kind && x.type === ownedEntity.spec?.type,
-        );
-        if (match) {
-          match.count += 1;
-        } else {
-          acc.push({
-            kind: ownedEntity.kind,
-            type: ownedEntity.spec?.type,
-            count: 1,
-          });
-        }
-        return acc;
-      },
-      [],
-    );
-
-    // Return top N (six) entities to be displayed in ownership boxes
-    const topN = counts.sort((a, b) => b.count - a.count).slice(0, 6);
-
-    return topN.map(topOwnedEntity => ({
-      counter: topOwnedEntity.count,
-      type: topOwnedEntity.type,
-      name: topOwnedEntity.type.toLocaleUpperCase('en-US'),
-      queryParams: getQueryParams(entity, topOwnedEntity),
-    })) as Array<{
-      counter: number;
-      type: string;
-      name: string;
-      queryParams: string;
-    }>;
-  }, [catalogApi, entity]);
-
-  if (loading) {
-    return <Progress />;
-  } else if (error) {
-    return <ResponseErrorPanel error={error} />;
-  }
+  useEffect(() => {
+    if (!relationAggregation) {
+      setRelationAggregation(defaultRelationAggregation);
+    }
+  }, [setRelationAggregation, defaultRelationAggregation, relationAggregation]);
 
   return (
-    <InfoCard title="Ownership" variant={variant}>
-      <Grid container>
-        {componentsWithCounters?.map(c => (
-          <Grid item xs={6} md={6} lg={4} key={c.name}>
-            <EntityCountTile
-              counter={c.counter}
-              type={c.type}
-              name={c.name}
-              url={`${catalogLink()}/?${c.queryParams}`}
-            />
-          </Grid>
-        ))}
-      </Grid>
-    </InfoCard>
+    <EntityInfoCard
+      title={t('ownershipCard.title')}
+      headerActions={
+        !relationsToggle && (
+          <Switch
+            isSelected={getRelationAggregation !== 'direct'}
+            onChange={isSelected =>
+              setRelationAggregation(isSelected ? 'aggregated' : 'direct')
+            }
+            label={t('ownershipCard.aggregateRelationsToggle.label')}
+          />
+        )
+      }
+    >
+      <ComponentsGrid
+        className={classes.grid}
+        entity={entity}
+        entityLimit={entityLimit}
+        relationAggregation={getRelationAggregation}
+        entityFilterKind={entityFilterKind}
+      />
+    </EntityInfoCard>
   );
 };

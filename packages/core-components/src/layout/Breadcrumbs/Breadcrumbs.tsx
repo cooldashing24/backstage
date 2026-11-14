@@ -14,19 +14,24 @@
  * limitations under the License.
  */
 
+import Box from '@material-ui/core/Box';
+import MaterialBreadcrumbs from '@material-ui/core/Breadcrumbs';
+import List from '@material-ui/core/List';
+import ListItem from '@material-ui/core/ListItem';
+import Popover from '@material-ui/core/Popover';
+import { withStyles } from '@material-ui/core/styles';
+import Typography from '@material-ui/core/Typography';
 import {
-  Box,
-  Breadcrumbs as MaterialBreadcrumbs,
-  List,
-  ListItem,
-  Popover,
-  Typography,
-  withStyles,
-} from '@material-ui/core';
-import React, { ComponentProps, Fragment } from 'react';
+  MouseEvent,
+  useState,
+  Children,
+  ComponentProps,
+  Fragment,
+} from 'react';
 
 type Props = ComponentProps<typeof MaterialBreadcrumbs>;
 
+/** @public */
 export type BreadcrumbsClickableTextClassKey = 'root';
 
 const ClickableText = withStyles(
@@ -39,6 +44,7 @@ const ClickableText = withStyles(
   { name: 'BackstageBreadcrumbsClickableText' },
 )(Typography);
 
+/** @public */
 export type BreadcrumbsStyledBoxClassKey = 'root';
 
 const StyledBox = withStyles(
@@ -51,13 +57,29 @@ const StyledBox = withStyles(
   { name: 'BackstageBreadcrumbsStyledBox' },
 )(Box);
 
+/** @public */
+export type BreadcrumbsCurrentPageClassKey = 'root';
+
+const BreadcrumbsCurrentPage = withStyles(
+  {
+    root: {
+      fontStyle: 'italic',
+    },
+  },
+  { name: 'BreadcrumbsCurrentPage' },
+)(Box);
+
+/**
+ * Breadcrumbs component to show navigation hierarchical structure
+ *
+ * @public
+ *
+ */
 export function Breadcrumbs(props: Props) {
   const { children, ...restProps } = props;
-  const [anchorEl, setAnchorEl] = React.useState<HTMLButtonElement | null>(
-    null,
-  );
+  const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
 
-  const childrenArray = React.Children.toArray(children);
+  const childrenArray = Children.toArray(children);
 
   const [firstPage, secondPage, ...expandablePages] = childrenArray;
   const currentPage = expandablePages.length
@@ -65,7 +87,7 @@ export function Breadcrumbs(props: Props) {
     : childrenArray[childrenArray.length - 1];
   const hasHiddenBreadcrumbs = childrenArray.length > 3;
 
-  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     setAnchorEl(event.currentTarget);
   };
 
@@ -82,7 +104,7 @@ export function Breadcrumbs(props: Props) {
         {hasHiddenBreadcrumbs && (
           <ClickableText onClick={handleClick}>...</ClickableText>
         )}
-        <Box style={{ fontStyle: 'italic' }}>{currentPage}</Box>
+        <BreadcrumbsCurrentPage>{currentPage}</BreadcrumbsCurrentPage>
       </MaterialBreadcrumbs>
       <Popover
         open={open}

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { ConsumedResponse } from '../errors/types';
 import { SerializedError } from './error';
 
 /**
@@ -21,7 +22,7 @@ import { SerializedError } from './error';
  *
  * @public
  */
-export type ErrorResponse = {
+export type ErrorResponseBody = {
   /** Details of the error that was caught */
   error: SerializedError;
 
@@ -41,7 +42,7 @@ export type ErrorResponse = {
 };
 
 /**
- * Attempts to construct an ErrorResponse out of a failed server request.
+ * Attempts to construct an ErrorResponseBody out of a failed server request.
  * Assumes that the response has already been checked to be not ok. This
  * function consumes the body of the response, and assumes that it hasn't
  * been consumed before.
@@ -52,9 +53,9 @@ export type ErrorResponse = {
  * @public
  * @param response - The response of a failed request
  */
-export async function parseErrorResponse(
-  response: Response,
-): Promise<ErrorResponse> {
+export async function parseErrorResponseBody(
+  response: ConsumedResponse & { text(): Promise<string> },
+): Promise<ErrorResponseBody> {
   try {
     const text = await response.text();
     if (text) {
@@ -73,7 +74,7 @@ export async function parseErrorResponse(
 
       return {
         error: {
-          name: 'Unknown',
+          name: 'Error',
           message: `Request failed with status ${response.status} ${response.statusText}, ${text}`,
         },
         response: {
@@ -87,7 +88,7 @@ export async function parseErrorResponse(
 
   return {
     error: {
-      name: 'Unknown',
+      name: 'Error',
       message: `Request failed with status ${response.status} ${response.statusText}`,
     },
     response: {

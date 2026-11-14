@@ -14,15 +14,27 @@
  * limitations under the License.
  */
 
-import React, { useEffect, useState } from 'react';
-import { BackstageTheme } from '@backstage/theme';
-import { Button, makeStyles } from '@material-ui/core';
+import Box from '@material-ui/core/Box';
+import Button from '@material-ui/core/Button';
+import { makeStyles } from '@material-ui/core/styles';
+import { useEffect, useState } from 'react';
+
 import { Select } from '../Select';
 import { SelectProps } from '../Select/Select';
+import { coreComponentsTranslationRef } from '../../translation';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
 
-export type TableFiltersClassKey = 'root' | 'value' | 'heder' | 'filters';
+export type TableFiltersClassKey =
+  | 'root'
+  | 'value'
+  | 'header'
+  /**
+   * @deprecated Use `'header'` instead. This was a typo in the original class key.
+   */
+  | 'heder'
+  | 'filters';
 
-const useFilterStyles = makeStyles<BackstageTheme>(
+const useFilterStyles = makeStyles(
   theme => ({
     root: {
       height: '100%',
@@ -38,10 +50,17 @@ const useFilterStyles = makeStyles<BackstageTheme>(
     header: {
       display: 'flex',
       alignItems: 'center',
-      height: '60px',
+      height: theme.spacing(7.5),
       justifyContent: 'space-between',
       borderBottom: `1px solid ${theme.palette.grey[500]}`,
     },
+    // Intentionally empty: the deprecated `heder` class is still applied to
+    // the same element as `header` so legacy theme overrides on
+    // `BackstageTableFilters.heder` continue to work. Keeping this rule empty
+    // (rather than duplicating `header`'s styles) avoids clobbering overrides
+    // on the canonical `header` key — JSS injects rules in key order, so an
+    // empty `heder` defined after `header` has no properties to override.
+    heder: {},
     filters: {
       display: 'flex',
       flexDirection: 'column',
@@ -74,6 +93,7 @@ export const Filters = (props: Props) => {
   const classes = useFilterStyles();
 
   const { onChangeFilters } = props;
+  const { t } = useTranslationRef(coreComponentsTranslationRef);
 
   const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>({
     ...props.selectedFilters,
@@ -92,15 +112,15 @@ export const Filters = (props: Props) => {
 
   // As material table doesn't provide a way to add a column filter tab we will make our own filter logic
   return (
-    <div className={classes.root}>
-      <div className={classes.header}>
-        <div className={classes.value}>Filters</div>
+    <Box className={classes.root}>
+      <Box className={`${classes.header} ${classes.heder}`}>
+        <Box className={classes.value}>{t('table.filter.title')}</Box>
         <Button color="primary" onClick={handleClick}>
-          Clear all
+          {t('table.filter.clearAll')}
         </Button>
-      </div>
-      <div className={classes.filters}>
-        {props.filters?.length &&
+      </Box>
+      <Box className={classes.filters}>
+        {!!props.filters?.length &&
           props.filters.map(filter => (
             <Select
               triggerReset={reset}
@@ -115,7 +135,7 @@ export const Filters = (props: Props) => {
               }
             />
           ))}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 };

@@ -1,0 +1,1763 @@
+/*
+ * Copyright 2020 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  coreServices,
+  createBackendPlugin,
+  resolvePackagePath,
+} from '@backstage/backend-plugin-api';
+import {
+  mockServices,
+  startTestBackend,
+  TestDatabases,
+  TestDatabaseId,
+  mockCredentials,
+} from '@backstage/backend-test-utils';
+import request from 'supertest';
+import crypto from 'node:crypto';
+import type { JsonObject } from '@backstage/types';
+import { OidcRouter } from './OidcRouter';
+import { UserInfoDatabase } from '../database/UserInfoDatabase';
+import { OidcDatabase } from '../database/OidcDatabase';
+import { AuthDatabase } from '../database/AuthDatabase';
+import { OidcService } from '../service/OidcService';
+import { TokenIssuer } from '../identity/types';
+import { OfflineAccessService } from './OfflineAccessService';
+import { CimdClientInfo, validateCimdUrl } from './CimdClient';
+import { catalogServiceMock } from '@backstage/plugin-catalog-node/testUtils';
+
+jest.mock('./CimdClient', () => {
+  const actual = jest.requireActual('./CimdClient');
+  return {
+    ...actual,
+    fetchCimdMetadata: jest.fn(),
+  };
+});
+
+import * as CimdClient from './CimdClient';
+
+const mockFetchCimdMetadata =
+  CimdClient.fetchCimdMetadata as jest.MockedFunction<
+    typeof CimdClient.fetchCimdMetadata
+  >;
+
+jest.setTimeout(60_000);
+
+describe('OidcRouter', () => {
+  const MOCK_USER_TOKEN = 'mock-user-token';
+  const MOCK_USER_ENTITY_REF = 'user:default/test-user';
+  const databases = TestDatabases.create();
+
+  afterEach(() => {
+    mockFetchCimdMetadata.mockReset();
+  });
+
+  function createCimdClient(options: {
+    clientName: string;
+    redirectUris: string[];
+    responseTypes?: string[];
+    grantTypes?: string[];
+    scope?: string;
+  }) {
+    const client = {
+      clientId: `https://example.com/${crypto.randomUUID()}.json`,
+      responseTypes: ['code'],
+      grantTypes: ['authorization_code'],
+      ...options,
+    };
+    mockFetchCimdMetadata.mockResolvedValue(client);
+    return client;
+  }
+
+  async function createRouter(
+    databaseId: TestDatabaseId,
+    authConfig: JsonObject = {
+      clientIdMetadataDocuments: {
+        enabled: true,
+        allowedClientIdPatterns: ['https://example.com/*'],
+        allowedRedirectUriPatterns: ['*'],
+      },
+    },
+  ) {
+    const knex = await databases.init(databaseId);
+
+    await knex.migrate.latest({
+      directory: resolvePackagePath(
+        '@backstage/plugin-auth-backend',
+        'migrations',
+      ),
+    });
+
+    const authDatabase = AuthDatabase.create({
+      getClient: async () => knex,
+    });
+
+    const oidcDatabase = await OidcDatabase.create({
+      database: authDatabase,
+    });
+
+    const userInfoDatabase = await UserInfoDatabase.create({
+      database: authDatabase,
+    });
+
+    const mockTokenIssuer = {
+      issueToken: jest.fn(),
+      listPublicKeys: jest.fn(),
+    } as unknown as jest.Mocked<TokenIssuer>;
+
+    const mockAuth = mockServices.auth.mock();
+    const mockHttpAuth = mockServices.httpAuth.mock();
+    const mockLogger = mockServices.logger.mock();
+    const mockConfig = mockServices.rootConfig({
+      data: {
+        auth: authConfig,
+      },
+    });
+
+    const oidcService = OidcService.create({
+      auth: mockAuth,
+      tokenIssuer: mockTokenIssuer,
+      baseUrl: 'http://localhost:7000',
+      userInfo: userInfoDatabase,
+      oidc: oidcDatabase,
+      config: mockConfig,
+      logger: mockLogger,
+    });
+
+    const oidcRouter = OidcRouter.create({
+      auth: mockAuth,
+      tokenIssuer: mockTokenIssuer,
+      baseUrl: 'http://localhost:7000',
+      appUrl: 'http://localhost:3000',
+      logger: mockLogger,
+      userInfo: userInfoDatabase,
+      oidc: oidcDatabase,
+      httpAuth: mockHttpAuth,
+      config: mockConfig,
+    });
+
+    return {
+      router: oidcRouter,
+      mocks: {
+        httpAuth: mockHttpAuth,
+        auth: mockAuth,
+        oidc: oidcDatabase,
+        userInfo: userInfoDatabase,
+        service: oidcService,
+        tokenIssuer: mockTokenIssuer,
+        logger: mockLogger,
+      },
+    };
+  }
+
+  async function createRouterWithOfflineAccess(
+    databaseId: TestDatabaseId,
+    refreshTokenConfig?: Record<string, unknown>,
+    extraAuthConfig?: Record<string, unknown>,
+  ) {
+    const knex = await databases.init(databaseId);
+
+    await knex.migrate.latest({
+      directory: resolvePackagePath(
+        '@backstage/plugin-auth-backend',
+        'migrations',
+      ),
+    });
+
+    const authDatabase = AuthDatabase.create({
+      getClient: async () => knex,
+    });
+
+    const oidcDatabase = await OidcDatabase.create({
+      database: authDatabase,
+    });
+
+    const userInfoDatabase = await UserInfoDatabase.create({
+      database: authDatabase,
+    });
+
+    const mockTokenIssuer = {
+      issueToken: jest.fn(),
+      listPublicKeys: jest.fn(),
+    } as unknown as jest.Mocked<TokenIssuer>;
+
+    const mockAuth = mockServices.auth.mock();
+    const mockHttpAuth = mockServices.httpAuth.mock();
+    const mockCatalog = catalogServiceMock.mock();
+    mockCatalog.getEntityByRef.mockResolvedValue({
+      apiVersion: 'backstage.io/v1alpha1',
+      kind: 'User',
+      metadata: { name: 'test-user', namespace: 'default' },
+      spec: {},
+    });
+    const mockConfig = mockServices.rootConfig({
+      data: {
+        auth: {
+          clientIdMetadataDocuments: {
+            enabled: true,
+            allowedClientIdPatterns: ['https://example.com/*'],
+            allowedRedirectUriPatterns: ['*'],
+          },
+          experimentalRefreshToken: {
+            enabled: true,
+            ...refreshTokenConfig,
+          },
+          ...extraAuthConfig,
+        },
+      },
+    });
+
+    const mockLifecycle = mockServices.lifecycle.mock();
+
+    const offlineAccess = await OfflineAccessService.create({
+      config: mockConfig,
+      database: { getClient: async () => knex },
+      logger: mockServices.logger.mock(),
+      lifecycle: mockLifecycle,
+      catalog: mockCatalog,
+      auth: mockAuth,
+    });
+
+    const oidcService = OidcService.create({
+      auth: mockAuth,
+      tokenIssuer: mockTokenIssuer,
+      baseUrl: 'http://localhost:7000',
+      userInfo: userInfoDatabase,
+      oidc: oidcDatabase,
+      config: mockConfig,
+      logger: mockServices.logger.mock(),
+      offlineAccess,
+    });
+
+    const oidcRouter = OidcRouter.create({
+      auth: mockAuth,
+      tokenIssuer: mockTokenIssuer,
+      baseUrl: 'http://localhost:7000',
+      appUrl: 'http://localhost:3000',
+      logger: mockServices.logger.mock(),
+      userInfo: userInfoDatabase,
+      oidc: oidcDatabase,
+      httpAuth: mockHttpAuth,
+      config: mockConfig,
+      offlineAccess,
+    });
+
+    return {
+      router: oidcRouter,
+      mocks: {
+        httpAuth: mockHttpAuth,
+        auth: mockAuth,
+        oidc: oidcDatabase,
+        userInfo: userInfoDatabase,
+        service: oidcService,
+        tokenIssuer: mockTokenIssuer,
+        catalog: mockCatalog,
+      },
+    };
+  }
+
+  describe.each(databases.eachSupportedId())('%p', databaseId => {
+    describe('/v1/userinfo', () => {
+      it('should return user info for full tokens', async () => {
+        const {
+          mocks: { auth, userInfo },
+          router,
+        } = await createRouter(databaseId);
+
+        await userInfo.addUserInfo({
+          claims: {
+            sub: 'k/ns:n',
+            ent: ['k/ns:a', 'k/ns:b'],
+            exp: Math.floor(Date.now() / 1000) + 3600,
+          },
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const response = await request(server)
+          .get('/api/auth/v1/userinfo')
+          .set(
+            'Authorization',
+            `Bearer h.${btoa(
+              JSON.stringify({ sub: 'k/ns:n', ent: ['k/ns:a', 'k/ns:b'] }),
+            )}.s`,
+          )
+          .expect(200);
+
+        expect(response.body).toEqual({
+          claims: {
+            sub: 'k/ns:n',
+            ent: ['k/ns:a', 'k/ns:b'],
+            exp: expect.any(Number),
+          },
+        });
+      });
+
+      it('should return user info for limited tokens', async () => {
+        const {
+          mocks: { auth, userInfo },
+          router,
+        } = await createRouter(databaseId);
+
+        await userInfo.addUserInfo({
+          claims: {
+            sub: 'k/ns:n',
+            ent: ['k/ns:a', 'k/ns:b'],
+            exp: Math.floor(Date.now() / 1000) + 3600,
+          },
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const response = await request(server)
+          .get('/api/auth/v1/userinfo')
+          .set(
+            'Authorization',
+            `Bearer h.${btoa(JSON.stringify({ sub: 'k/ns:n' }))}.s`,
+          )
+          .expect(200);
+
+        expect(response.body).toEqual({
+          claims: {
+            sub: 'k/ns:n',
+            ent: ['k/ns:a', 'k/ns:b'],
+            exp: expect.any(Number),
+          },
+        });
+      });
+    });
+
+    describe('auth flow', () => {
+      it('should create an authorization session via authorization endpoint', async () => {
+        const { router } = await createRouter(databaseId);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const response = await request(server)
+          .get('/api/auth/v1/authorize')
+          .query({
+            client_id: client.clientId,
+            redirect_uri: 'https://example.com/callback',
+            response_type: 'code',
+            code_challenge: 'test-code-verifier',
+            code_challenge_method: 'plain',
+            scope: 'openid',
+            state: 'test-state',
+          })
+          .expect(302);
+
+        const location = new URL(response.header.location);
+        expect(location.origin).toBe('http://localhost:3000');
+        expect(location.pathname).toMatch(/^\/oauth2\/authorize\/[a-f0-9-]+$/);
+      });
+
+      it('should get auth session details', async () => {
+        const {
+          mocks: { service },
+          router,
+        } = await createRouter(databaseId);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const authSession = await service.createAuthorizationSession({
+          codeChallenge: 'test-code-verifier',
+          codeChallengeMethod: 'plain',
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const response = await request(server)
+          .get(`/api/auth/v1/sessions/${authSession.id}`)
+          .expect(200);
+
+        expect(response.body).toEqual({
+          id: authSession.id,
+          clientId: client.clientId,
+          clientName: 'Test Client',
+          scope: 'openid',
+          redirectUri: 'https://example.com/callback',
+        });
+      });
+
+      it('should approve authorization session', async () => {
+        const {
+          mocks: { auth, service, httpAuth },
+          router,
+        } = await createRouter(databaseId);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const authSession = await service.createAuthorizationSession({
+          codeChallenge: 'test-code-verifier',
+          codeChallengeMethod: 'plain',
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user('user:default/test-user'),
+        );
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const response = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+          .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+          .expect(200);
+
+        const redirectUrl = new URL(response.body.redirectUrl);
+        expect(redirectUrl.origin).toBe('https://example.com');
+        expect(redirectUrl.pathname).toBe('/callback');
+        expect(redirectUrl.searchParams.get('code')).toBeDefined();
+        expect(redirectUrl.searchParams.get('state')).toBe('test-state');
+      });
+
+      it('should reject auth session', async () => {
+        const {
+          mocks: { service, httpAuth, auth },
+          router,
+        } = await createRouter(databaseId);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const authSession = await service.createAuthorizationSession({
+          codeChallenge: 'test-code-verifier',
+          codeChallengeMethod: 'plain',
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+        });
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user('user:default/test-user'),
+        );
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const response = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/reject`)
+          .expect(200);
+
+        const redirectUrl = new URL(response.body.redirectUrl);
+        expect(redirectUrl.origin).toBe('https://example.com');
+        expect(redirectUrl.pathname).toBe('/callback');
+        expect(redirectUrl.searchParams.get('error')).toBe('access_denied');
+        expect(redirectUrl.searchParams.get('error_description')).toBe(
+          'User denied the request',
+        );
+        expect(redirectUrl.searchParams.get('state')).toBe('test-state');
+      });
+    });
+
+    describe('token exchange', () => {
+      it('should exchange authorization code for tokens', async () => {
+        const {
+          mocks: { auth, service, tokenIssuer, httpAuth, logger },
+          router,
+        } = await createRouter(databaseId);
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user('user:default/test-user'),
+        );
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-access-token',
+        });
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const authSession = await service.createAuthorizationSession({
+          codeChallenge: 'test-code-verifier',
+          codeChallengeMethod: 'plain',
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const approvalResponse = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+          .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+          .expect(200);
+
+        const redirectUrl = new URL(approvalResponse.body.redirectUrl);
+        const authorizationCode = redirectUrl.searchParams.get('code');
+
+        expect(authorizationCode).toBeDefined();
+
+        const tokenRequest = {
+          grant_type: 'authorization_code',
+          code: authorizationCode,
+          redirect_uri: 'https://example.com/callback',
+          code_verifier: 'test-code-verifier',
+          client_id: client.clientId,
+        };
+        for (const clientId of [
+          'https://example.com/other-client.json',
+          'legacy-client-id',
+        ]) {
+          const response = await request(server)
+            .post('/api/auth/v1/token')
+            .send({ ...tokenRequest, client_id: clientId })
+            .expect(400);
+          expect(response.body).toEqual({
+            error: 'invalid_grant',
+            error_description: 'Client ID mismatch',
+          });
+        }
+        for (const invalidParams of [
+          { code_verifier: undefined },
+          { code_verifier: 'wrong-verifier' },
+          { redirect_uri: 'https://example.com/other-callback' },
+        ]) {
+          const response = await request(server)
+            .post('/api/auth/v1/token')
+            .send({ ...tokenRequest, ...invalidParams })
+            .expect(400);
+          expect(response.body.error).toBe('invalid_grant');
+        }
+        expect(tokenIssuer.issueToken).not.toHaveBeenCalled();
+
+        const tokenResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send(tokenRequest)
+          .expect(200);
+
+        expect(tokenResponse.body).toEqual({
+          access_token: 'mock-access-token',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          id_token: 'mock-access-token',
+          scope: 'openid',
+        });
+
+        expect(tokenIssuer.issueToken).toHaveBeenCalledWith({
+          claims: {
+            sub: MOCK_USER_ENTITY_REF,
+          },
+        });
+        const replayResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send(tokenRequest)
+          .expect(400);
+        expect(replayResponse.body.error).toBe('invalid_grant');
+        expect(tokenIssuer.issueToken).toHaveBeenCalledTimes(1);
+        expect(logger.warn).not.toHaveBeenCalled();
+
+        for (const clientId of [undefined, '']) {
+          const legacySession = await service.createAuthorizationSession({
+            clientId: client.clientId,
+            redirectUri: tokenRequest.redirect_uri,
+            responseType: 'code',
+            codeChallenge: tokenRequest.code_verifier,
+            codeChallengeMethod: 'plain',
+          });
+          const { redirectUrl: legacyRedirectUrl } =
+            await service.approveAuthorizationSession({
+              sessionId: legacySession.id,
+              userEntityRef: MOCK_USER_ENTITY_REF,
+            });
+          const legacyTokenResponse = await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              ...tokenRequest,
+              client_id: clientId,
+              code: new URL(legacyRedirectUrl).searchParams.get('code'),
+            })
+            .expect(200);
+          expect(legacyTokenResponse.body.access_token).toBe(
+            'mock-access-token',
+          );
+        }
+        expect(logger.warn).toHaveBeenCalledTimes(2);
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Authorization-code exchange without client_id is deprecated and will be rejected in a future release. Update the client to include client_id.',
+        );
+      });
+
+      it('should exchange authorization code for tokens with PKCE', async () => {
+        const {
+          mocks: { auth, service, tokenIssuer, httpAuth },
+          router,
+        } = await createRouter(databaseId);
+
+        tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-access-token-pkce',
+        });
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user('user:default/test-user-pkce'),
+        );
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const codeVerifier =
+          'test-code-verifier-123456789012345678901234567890123456789012345';
+        const codeChallenge = codeVerifier;
+
+        const authSession = await service.createAuthorizationSession({
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+          codeChallenge,
+          codeChallengeMethod: 'plain',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const approvalResponse = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+          .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+          .expect(200);
+
+        const redirectUrl = new URL(approvalResponse.body.redirectUrl);
+        const authorizationCode = redirectUrl.searchParams.get('code');
+
+        expect(authorizationCode).toBeDefined();
+
+        const tokenResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'authorization_code',
+            client_id: client.clientId,
+            code: authorizationCode,
+            redirect_uri: 'https://example.com/callback',
+            code_verifier: codeVerifier,
+          })
+          .expect(200);
+
+        expect(tokenResponse.body).toEqual({
+          access_token: 'mock-access-token-pkce',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          id_token: 'mock-access-token-pkce',
+          scope: 'openid',
+        });
+
+        expect(tokenIssuer.issueToken).toHaveBeenCalledWith({
+          claims: {
+            sub: 'user:default/test-user-pkce',
+          },
+        });
+      });
+
+      it('should reject token exchange with invalid authorization code', async () => {
+        const { router } = await createRouter(databaseId);
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const tokenResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'authorization_code',
+            client_id: 'https://example.com/client.json',
+            code_verifier: 'test-code-verifier',
+            code: 'invalid-code',
+            redirect_uri: 'https://example.com/callback',
+          })
+          .expect(400);
+
+        expect(tokenResponse.body).toEqual({
+          error: 'invalid_grant',
+          error_description: 'Invalid authorization code',
+        });
+      });
+
+      it('should exchange authorization code for tokens with PKCE S256', async () => {
+        const {
+          mocks: { auth, service, tokenIssuer, httpAuth },
+          router,
+        } = await createRouter(databaseId);
+
+        tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-access-token-s256',
+        });
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user('user:default/test-user-s256'),
+        );
+
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const client = createCimdClient({
+          clientName: 'Test Client',
+          redirectUris: ['https://example.com/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        });
+
+        const codeVerifier =
+          'test-code-verifier-s256-123456789012345678901234567890123456789';
+        const codeChallenge = crypto
+          .createHash('sha256')
+          .update(codeVerifier)
+          .digest('base64url');
+
+        const authSession = await service.createAuthorizationSession({
+          clientId: client.clientId,
+          redirectUri: 'https://example.com/callback',
+          responseType: 'code',
+          scope: 'openid',
+          state: 'test-state',
+          codeChallenge,
+          codeChallengeMethod: 'S256',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const approvalResponse = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+          .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+          .expect(200);
+
+        const redirectUrl = new URL(approvalResponse.body.redirectUrl);
+        const authorizationCode = redirectUrl.searchParams.get('code');
+
+        expect(authorizationCode).toBeDefined();
+
+        const tokenResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'authorization_code',
+            client_id: client.clientId,
+            code: authorizationCode,
+            redirect_uri: 'https://example.com/callback',
+            code_verifier: codeVerifier,
+          })
+          .expect(200);
+
+        expect(tokenResponse.body).toEqual({
+          access_token: 'mock-access-token-s256',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          id_token: 'mock-access-token-s256',
+          scope: 'openid',
+        });
+
+        expect(tokenIssuer.issueToken).toHaveBeenCalledWith({
+          claims: {
+            sub: 'user:default/test-user-s256',
+          },
+        });
+      });
+    });
+
+    async function doAuthFlowWithOfflineAccess(
+      databaseId_: TestDatabaseId,
+      refreshTokenConfig?: Record<string, unknown>,
+    ) {
+      const result = await createRouterWithOfflineAccess(
+        databaseId_,
+        refreshTokenConfig,
+      );
+      const {
+        mocks: { auth, service, tokenIssuer, httpAuth },
+        router,
+      } = result;
+
+      tokenIssuer.issueToken.mockResolvedValue({
+        token: 'mock-access-token',
+      });
+
+      httpAuth.credentials.mockResolvedValueOnce(
+        mockCredentials.user(MOCK_USER_ENTITY_REF),
+      );
+      auth.isPrincipal.mockReturnValueOnce(true);
+
+      const client = createCimdClient({
+        clientName: 'Test Client',
+        redirectUris: ['https://example.com/callback'],
+        responseTypes: ['code'],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        scope: 'openid offline_access',
+      });
+
+      const authSession = await service.createAuthorizationSession({
+        codeChallenge: 'test-code-verifier',
+        codeChallengeMethod: 'plain',
+        clientId: client.clientId,
+        redirectUri: 'https://example.com/callback',
+        responseType: 'code',
+        scope: 'openid offline_access',
+      });
+
+      const { server } = await startTestBackend({
+        features: [
+          createBackendPlugin({
+            pluginId: 'auth',
+            register(reg) {
+              reg.registerInit({
+                deps: { httpRouter: coreServices.httpRouter },
+                async init({ httpRouter }) {
+                  httpRouter.use(router.getRouter());
+                  httpRouter.addAuthPolicy({
+                    path: '/',
+                    allow: 'unauthenticated',
+                  });
+                },
+              });
+            },
+          }),
+        ],
+      });
+
+      const approvalResponse = await request(server)
+        .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+        .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+        .expect(200);
+
+      const redirectUrl = new URL(approvalResponse.body.redirectUrl);
+      const authorizationCode = redirectUrl.searchParams.get('code')!;
+
+      const tokenResponse = await request(server)
+        .post('/api/auth/v1/token')
+        .send({
+          grant_type: 'authorization_code',
+          client_id: client.clientId,
+          code_verifier: 'test-code-verifier',
+          code: authorizationCode,
+          redirect_uri: 'https://example.com/callback',
+        })
+        .expect(200);
+
+      return { server, tokenResponse, client, ...result };
+    }
+
+    describe('refresh tokens', () => {
+      it('should return a refresh token when offline_access scope is requested', async () => {
+        const { tokenResponse } = await doAuthFlowWithOfflineAccess(databaseId);
+
+        expect(tokenResponse.body).toEqual({
+          access_token: 'mock-access-token',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          id_token: 'mock-access-token',
+          scope: 'openid offline_access',
+          refresh_token: expect.any(String),
+        });
+      });
+
+      it('should refresh a token without client credentials', async () => {
+        const { server, tokenResponse, mocks } =
+          await doAuthFlowWithOfflineAccess(databaseId);
+
+        mocks.tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-refreshed-token',
+        });
+
+        const refreshResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: tokenResponse.body.refresh_token,
+          })
+          .expect(200);
+
+        expect(refreshResponse.body).toEqual({
+          access_token: 'mock-refreshed-token',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          refresh_token: expect.any(String),
+        });
+
+        // New refresh token should be different (rotation)
+        expect(refreshResponse.body.refresh_token).not.toBe(
+          tokenResponse.body.refresh_token,
+        );
+      });
+
+      it('should reject refresh for a different public client', async () => {
+        const { server, tokenResponse } = await doAuthFlowWithOfflineAccess(
+          databaseId,
+        );
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            client_id: 'https://example.com/other-client.json',
+            refresh_token: tokenResponse.body.refresh_token,
+          })
+          .expect(400);
+      });
+
+      it('should reject refresh with an invalid refresh token', async () => {
+        const { server } = await doAuthFlowWithOfflineAccess(databaseId);
+
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: 'invalid-token',
+          })
+          .expect(400);
+      });
+
+      it('should reject reuse of a rotated refresh token', async () => {
+        const { server, tokenResponse, mocks } =
+          await doAuthFlowWithOfflineAccess(databaseId);
+
+        mocks.tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-refreshed-token',
+        });
+
+        const originalRefreshToken = tokenResponse.body.refresh_token;
+
+        // First refresh should succeed
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: originalRefreshToken,
+          })
+          .expect(200);
+
+        // Reusing the same refresh token should fail (it was rotated)
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: originalRefreshToken,
+          })
+          .expect(400);
+      });
+
+      describe('catalog user validation', () => {
+        it('should reject refresh when catalog user does not exist', async () => {
+          const { server, tokenResponse, mocks } =
+            await doAuthFlowWithOfflineAccess(databaseId);
+
+          mocks.catalog.getEntityByRef.mockResolvedValueOnce(undefined);
+
+          await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(400);
+        });
+
+        it('should reject refresh when catalog is unavailable', async () => {
+          const { server, tokenResponse, mocks } =
+            await doAuthFlowWithOfflineAccess(databaseId);
+
+          mocks.catalog.getEntityByRef.mockRejectedValueOnce(
+            new Error('Catalog unavailable'),
+          );
+
+          await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(400);
+        });
+
+        it('should allow retry after transient catalog failure', async () => {
+          const { server, tokenResponse, mocks } =
+            await doAuthFlowWithOfflineAccess(databaseId);
+
+          mocks.catalog.getEntityByRef.mockRejectedValueOnce(
+            new Error('Catalog unavailable'),
+          );
+
+          // First refresh fails due to catalog error
+          await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(400);
+
+          // Retry with same token succeeds because session was preserved
+          mocks.catalog.getEntityByRef.mockResolvedValueOnce({
+            apiVersion: 'backstage.io/v1alpha1',
+            kind: 'User',
+            metadata: { name: 'test-user', namespace: 'default' },
+            spec: {},
+          });
+          mocks.tokenIssuer.issueToken.mockResolvedValue({
+            token: 'mock-refreshed-token',
+          });
+
+          const retryResponse = await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(200);
+
+          expect(retryResponse.body.access_token).toBe('mock-refreshed-token');
+        });
+
+        it('should not allow retry after user entity not found', async () => {
+          const { server, tokenResponse, mocks } =
+            await doAuthFlowWithOfflineAccess(databaseId);
+
+          mocks.catalog.getEntityByRef.mockResolvedValueOnce(undefined);
+
+          // First refresh fails and session is revoked
+          await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(400);
+
+          // Retry fails because session was deleted
+          mocks.catalog.getEntityByRef.mockResolvedValueOnce({
+            apiVersion: 'backstage.io/v1alpha1',
+            kind: 'User',
+            metadata: { name: 'test-user', namespace: 'default' },
+            spec: {},
+          });
+
+          await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(400);
+        });
+
+        it('should skip catalog check when dangerouslyDisableCatalogPresenceCheck is set', async () => {
+          const { server, tokenResponse, mocks } =
+            await doAuthFlowWithOfflineAccess(databaseId, {
+              dangerouslyDisableCatalogPresenceCheck: true,
+            });
+
+          mocks.catalog.getEntityByRef.mockResolvedValueOnce(undefined);
+          mocks.tokenIssuer.issueToken.mockResolvedValue({
+            token: 'mock-refreshed-token',
+          });
+
+          const refreshResponse = await request(server)
+            .post('/api/auth/v1/token')
+            .send({
+              grant_type: 'refresh_token',
+              refresh_token: tokenResponse.body.refresh_token,
+            })
+            .expect(200);
+
+          expect(refreshResponse.body.access_token).toBe(
+            'mock-refreshed-token',
+          );
+          expect(mocks.catalog.getEntityByRef).not.toHaveBeenCalled();
+        });
+      });
+    });
+
+    describe('token revocation', () => {
+      async function doCimdAuthFlowWithOfflineAccess(
+        databaseId_: TestDatabaseId,
+      ) {
+        const cimdClientId = 'https://example.com/oauth-client';
+        mockFetchCimdMetadata.mockResolvedValue({
+          clientId: cimdClientId,
+          clientName: 'Test CIMD Client',
+          redirectUris: ['http://localhost:8080/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code', 'refresh_token'],
+          scope: 'openid offline_access',
+        });
+
+        const result = await createRouterWithOfflineAccess(
+          databaseId_,
+          undefined,
+          {
+            clientIdMetadataDocuments: {
+              enabled: true,
+              allowedClientIdPatterns: ['https://example.com/*'],
+              allowedRedirectUriPatterns: ['*'],
+            },
+          },
+        );
+        const {
+          mocks: { auth, service, tokenIssuer, httpAuth },
+          router,
+        } = result;
+
+        tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-access-token',
+        });
+
+        httpAuth.credentials.mockResolvedValueOnce(
+          mockCredentials.user(MOCK_USER_ENTITY_REF),
+        );
+        auth.isPrincipal.mockReturnValueOnce(true);
+
+        const codeVerifier = 'test-code-verifier-for-pkce';
+        const codeChallenge = crypto
+          .createHash('sha256')
+          .update(codeVerifier)
+          .digest('base64url');
+
+        const authSession = await service.createAuthorizationSession({
+          clientId: cimdClientId,
+          redirectUri: 'http://localhost:8080/callback',
+          responseType: 'code',
+          scope: 'openid offline_access',
+          codeChallenge,
+          codeChallengeMethod: 'S256',
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const approvalResponse = await request(server)
+          .post(`/api/auth/v1/sessions/${authSession.id}/approve`)
+          .set('Authorization', `Bearer ${MOCK_USER_TOKEN}`)
+          .expect(200);
+
+        const redirectUrl = new URL(approvalResponse.body.redirectUrl);
+        const authorizationCode = redirectUrl.searchParams.get('code')!;
+
+        const tokenResponse = await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'authorization_code',
+            client_id: cimdClientId,
+            code: authorizationCode,
+            redirect_uri: 'http://localhost:8080/callback',
+            code_verifier: codeVerifier,
+          })
+          .expect(200);
+
+        return { server, tokenResponse, cimdClientId, ...result };
+      }
+
+      it('should revoke a refresh token for a public client', async () => {
+        const { server, tokenResponse, client } =
+          await doAuthFlowWithOfflineAccess(databaseId);
+
+        await request(server)
+          .post('/api/auth/v1/revoke')
+          .send({
+            token: tokenResponse.body.refresh_token,
+            client_id: client.clientId,
+          })
+          .expect(200);
+
+        // The revoked refresh token can no longer be used
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: tokenResponse.body.refresh_token,
+          })
+          .expect(400);
+      });
+
+      it('should return 200 for an invalid token', async () => {
+        const { server, client } = await doAuthFlowWithOfflineAccess(
+          databaseId,
+        );
+
+        // RFC 7009 responds with 200 even when the token is unknown
+        await request(server)
+          .post('/api/auth/v1/revoke')
+          .send({
+            token: 'not-a-valid-token',
+            client_id: client.clientId,
+          })
+          .expect(200);
+      });
+
+      it('should revoke a refresh token for a CIMD client without a client secret', async () => {
+        const { server, tokenResponse, cimdClientId } =
+          await doCimdAuthFlowWithOfflineAccess(databaseId);
+
+        expect(tokenResponse.body.refresh_token).toEqual(expect.any(String));
+
+        await request(server)
+          .post('/api/auth/v1/revoke')
+          .send({
+            token: tokenResponse.body.refresh_token,
+            client_id: cimdClientId,
+          })
+          .expect(200);
+
+        // The revoked refresh token can no longer be used
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: tokenResponse.body.refresh_token,
+          })
+          .expect(400);
+      });
+
+      it('should reject revocation for client IDs outside the allowed CIMD patterns', async () => {
+        const { server, tokenResponse, mocks } =
+          await doCimdAuthFlowWithOfflineAccess(databaseId);
+
+        await request(server)
+          .post('/api/auth/v1/revoke')
+          .send({
+            token: tokenResponse.body.refresh_token,
+            client_id: 'https://evil.example.net/oauth-client',
+          })
+          .expect(401);
+
+        // Non-CIMD client IDs cannot authenticate without a secret either
+        await request(server)
+          .post('/api/auth/v1/revoke')
+          .send({
+            token: tokenResponse.body.refresh_token,
+            client_id: 'some-random-client',
+          })
+          .expect(401);
+
+        // The refresh token was not revoked by the failed attempts
+        mocks.tokenIssuer.issueToken.mockResolvedValue({
+          token: 'mock-refreshed-token',
+        });
+        await request(server)
+          .post('/api/auth/v1/token')
+          .send({
+            grant_type: 'refresh_token',
+            refresh_token: tokenResponse.body.refresh_token,
+          })
+          .expect(200);
+      });
+    });
+
+    describe('CIMD metadata endpoint', () => {
+      it('should return 404 when CIMD is not enabled', async () => {
+        const { router } = await createRouter(databaseId, {
+          experimentalDynamicClientRegistration: { enabled: true },
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(router.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const response = await request(server)
+          .get('/api/auth/.well-known/oauth-client/cli.json')
+          .expect(404);
+
+        expect(response.body).toEqual({
+          error: 'not_found',
+          error_description: 'Client ID metadata documents not enabled',
+        });
+        await request(server)
+          .post('/api/auth/v1/register')
+          .send({})
+          .expect(404);
+        await request(server).get('/api/auth/v1/authorize').expect(404);
+        await request(server).post('/api/auth/v1/token').send({}).expect(404);
+      });
+
+      it('should return CIMD document when enabled', async () => {
+        const knex = await databases.init(databaseId);
+
+        await knex.migrate.latest({
+          directory: resolvePackagePath(
+            '@backstage/plugin-auth-backend',
+            'migrations',
+          ),
+        });
+
+        const authDatabase = AuthDatabase.create({
+          getClient: async () => knex,
+        });
+
+        const oidcDatabase = await OidcDatabase.create({
+          database: authDatabase,
+        });
+
+        const userInfoDatabase = await UserInfoDatabase.create({
+          database: authDatabase,
+        });
+
+        const mockTokenIssuer = {
+          issueToken: jest.fn(),
+          listPublicKeys: jest.fn(),
+        } as unknown as jest.Mocked<TokenIssuer>;
+
+        const oidcRouter = OidcRouter.create({
+          auth: mockServices.auth.mock(),
+          tokenIssuer: mockTokenIssuer,
+          baseUrl: 'http://localhost:7007/api/auth',
+          appUrl: 'http://localhost:3000',
+          logger: mockServices.logger.mock(),
+          userInfo: userInfoDatabase,
+          oidc: oidcDatabase,
+          httpAuth: mockServices.httpAuth.mock(),
+          config: mockServices.rootConfig({
+            data: {
+              auth: {
+                clientIdMetadataDocuments: {
+                  enabled: true,
+                  allowedClientIdPatterns: ['*'],
+                  allowedRedirectUriPatterns: ['*'],
+                },
+              },
+            },
+          }),
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(oidcRouter.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const response = await request(server)
+          .get('/api/auth/.well-known/oauth-client/cli.json')
+          .expect(200);
+
+        expect(response.body).toEqual({
+          client_id:
+            'http://localhost:7007/api/auth/.well-known/oauth-client/cli.json',
+          client_name: 'Backstage CLI',
+          redirect_uris: ['http://127.0.0.1:8055/callback'],
+          response_types: ['code'],
+          grant_types: ['authorization_code'],
+          token_endpoint_auth_method: 'none',
+          scope: 'openid offline_access',
+        });
+      });
+    });
+
+    describe('CIMD authorization', () => {
+      it('should enable authorization routes when CIMD is enabled', async () => {
+        const cimdClientId = 'https://example.com/oauth-client';
+        const cimdMetadata: CimdClientInfo = {
+          clientId: cimdClientId,
+          clientName: 'Test CLI Client',
+          redirectUris: ['http://localhost:8080/callback'],
+          responseTypes: ['code'],
+          grantTypes: ['authorization_code'],
+          scope: 'openid',
+        };
+        mockFetchCimdMetadata.mockResolvedValue(cimdMetadata);
+
+        expect(() => validateCimdUrl(cimdClientId)).not.toThrow();
+
+        const knex = await databases.init(databaseId);
+
+        await knex.migrate.latest({
+          directory: resolvePackagePath(
+            '@backstage/plugin-auth-backend',
+            'migrations',
+          ),
+        });
+
+        const authDatabase = AuthDatabase.create({
+          getClient: async () => knex,
+        });
+
+        const oidcDatabase = await OidcDatabase.create({
+          database: authDatabase,
+        });
+
+        const userInfoDatabase = await UserInfoDatabase.create({
+          database: authDatabase,
+        });
+
+        const mockTokenIssuer = {
+          issueToken: jest.fn(),
+          listPublicKeys: jest.fn(),
+        } as unknown as jest.Mocked<TokenIssuer>;
+
+        const mockAuth = mockServices.auth.mock();
+        const mockHttpAuth = mockServices.httpAuth.mock();
+        const mockConfig = mockServices.rootConfig({
+          data: {
+            auth: {
+              clientIdMetadataDocuments: {
+                enabled: true,
+                allowedClientIdPatterns: ['*'],
+                allowedRedirectUriPatterns: ['*'],
+              },
+            },
+          },
+        });
+
+        const oidcRouter = OidcRouter.create({
+          auth: mockAuth,
+          tokenIssuer: mockTokenIssuer,
+          baseUrl: 'http://localhost:7007/api/auth',
+          appUrl: 'http://localhost:3000',
+          logger: mockServices.logger.mock(),
+          userInfo: userInfoDatabase,
+          oidc: oidcDatabase,
+          httpAuth: mockHttpAuth,
+          config: mockConfig,
+        });
+
+        const { server } = await startTestBackend({
+          features: [
+            createBackendPlugin({
+              pluginId: 'auth',
+              register(reg) {
+                reg.registerInit({
+                  deps: { httpRouter: coreServices.httpRouter },
+                  async init({ httpRouter }) {
+                    httpRouter.use(oidcRouter.getRouter());
+                    httpRouter.addAuthPolicy({
+                      path: '/',
+                      allow: 'unauthenticated',
+                    });
+                  },
+                });
+              },
+            }),
+          ],
+        });
+
+        const codeVerifier = 'test-code-verifier-for-pkce';
+        const codeChallenge = crypto
+          .createHash('sha256')
+          .update(codeVerifier)
+          .digest('base64url');
+
+        // /v1/authorize should work with CIMD-only config
+        const authorizeResponse = await request(server)
+          .get('/api/auth/v1/authorize')
+          .query({
+            client_id: cimdClientId,
+            redirect_uri: 'http://localhost:8080/callback',
+            response_type: 'code',
+            scope: 'openid',
+            state: 'test-state',
+            code_challenge: codeChallenge,
+            code_challenge_method: 'S256',
+          });
+
+        expect(authorizeResponse.status).toBe(302);
+
+        // Should redirect to consent screen
+        expect(mockFetchCimdMetadata).toHaveBeenCalledWith({
+          clientId: cimdClientId,
+          validatedUrl: expect.any(URL),
+          skipSsrfCheck: false,
+        });
+        const location = new URL(authorizeResponse.header.location);
+        expect(location.origin).toBe('http://localhost:3000');
+        expect(location.pathname).toMatch(/^\/oauth2\/authorize\/[a-f0-9-]+$/);
+
+        // Dynamic client registration is no longer supported
+        await request(server)
+          .post('/api/auth/v1/register')
+          .send({
+            client_name: 'Test Client',
+            redirect_uris: ['https://example.com/callback'],
+          })
+          .expect(404);
+      });
+    });
+  });
+});

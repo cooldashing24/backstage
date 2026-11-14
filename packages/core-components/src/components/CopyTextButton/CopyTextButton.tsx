@@ -15,13 +15,22 @@
  */
 
 import { errorApiRef, useApi } from '@backstage/core-plugin-api';
-import { IconButton, Tooltip } from '@material-ui/core';
+import {
+  ButtonIcon,
+  ButtonIconProps,
+  Tooltip,
+  TooltipTrigger,
+} from '@backstage/ui';
 import CopyIcon from '@material-ui/icons/FileCopy';
-import React, { MouseEventHandler, useEffect, useState } from 'react';
-import { useCopyToClipboard } from 'react-use';
+import { useEffect, useRef, useState } from 'react';
+import useCopyToClipboard from 'react-use/esm/useCopyToClipboard';
+import { coreComponentsTranslationRef } from '../../translation';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
 
 /**
  * Properties for {@link CopyTextButton}
+ *
+ * @public
  */
 export interface CopyTextButtonProps {
   /**
@@ -44,11 +53,30 @@ export interface CopyTextButtonProps {
    * Default: "Text copied to clipboard"
    */
   tooltipText?: string;
+
+  /**
+   * Text to use as aria-label prop on the button
+   *
+   * @remarks
+   *
+   * Default: "Copy text"
+   */
+  'aria-label'?: string;
+
+  /**
+   * The visual variant of the button
+   *
+   * @remarks
+   *
+   * Default: "primary"
+   */
+  variant?: ButtonIconProps['variant'];
 }
 
 /**
  * Copy text button with visual feedback
  *
+ * @public
  * @remarks
  *
  * Visual feedback takes form of:
@@ -58,17 +86,25 @@ export interface CopyTextButtonProps {
  *
  * @example
  *
- * `<CopyTextButton text="My text that I want to be copied to the clipboard" />`
+ * ```
+ * <CopyTextButton
+ *   text="My text that I want to be copied to the clipboard"
+ *   arial-label="Accessible label for this button" />
+ * ```
  */
 export function CopyTextButton(props: CopyTextButtonProps) {
+  const { t } = useTranslationRef(coreComponentsTranslationRef);
   const {
     text,
     tooltipDelay = 1000,
-    tooltipText = 'Text copied to clipboard',
+    tooltipText = t('copyTextButton.tooltipText'),
+    'aria-label': ariaLabel = 'Copy text',
+    variant,
   } = props;
   const errorApi = useApi(errorApiRef);
   const [open, setOpen] = useState(false);
   const [{ error }, copyToClipboard] = useCopyToClipboard();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (error) {
@@ -76,26 +112,44 @@ export function CopyTextButton(props: CopyTextButtonProps) {
     }
   }, [error, errorApi]);
 
-  const handleCopyClick: MouseEventHandler = e => {
-    e.stopPropagation();
+  const handleCopyClick = () => {
+    // Clear any existing timeout to reset the timer on repeated clicks
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
     setOpen(true);
     copyToClipboard(text);
+
+    // Set new timeout to close tooltip
+    timeoutRef.current = setTimeout(() => {
+      setOpen(false);
+    }, tooltipDelay);
   };
 
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
   return (
-    <>
-      <Tooltip
-        id="copy-test-tooltip"
-        title={tooltipText}
-        placement="top"
-        leaveDelay={tooltipDelay}
-        onClose={() => setOpen(false)}
-        open={open}
-      >
-        <IconButton onClick={handleCopyClick}>
-          <CopyIcon />
-        </IconButton>
-      </Tooltip>
-    </>
+    <TooltipTrigger
+      isOpen={open}
+      onOpenChange={isOpen => {
+        if (!isOpen) setOpen(false);
+      }}
+    >
+      <ButtonIcon
+        icon={<CopyIcon />}
+        onPress={handleCopyClick}
+        aria-label={ariaLabel}
+        variant={variant}
+      />
+      <Tooltip>{tooltipText}</Tooltip>
+    </TooltipTrigger>
   );
 }

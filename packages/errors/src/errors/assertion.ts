@@ -1,0 +1,125 @@
+/*
+ * Copyright 2021 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * An object that is shaped like an `Error`.
+ *
+ * @public
+ */
+export type ErrorLike = {
+  name: string;
+  message: string;
+  stack?: string;
+  [unknownKeys: string]: unknown;
+};
+
+/**
+ * Checks whether an unknown value is an {@link ErrorLike} object, which guarantees that it's
+ * an object that has at least two string properties: a non-empty `name` and `message`.
+ *
+ * @public
+ * @param value - an unknown value
+ * @returns true if the value is an {@link ErrorLike} object, false otherwise
+ */
+export function isError(value: unknown): value is ErrorLike {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const maybe = value as Partial<ErrorLike>;
+  if (typeof maybe.name !== 'string' || maybe.name === '') {
+    return false;
+  }
+  if (typeof maybe.message !== 'string') {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Checks whether a value is error-shaped and has the given explicit name.
+ * Any defined `cause` must also be error-shaped.
+ *
+ * This uses lightweight shape checks rather than constructor identity, so it
+ * works across package copies and after error serialization. A matching name
+ * is assumed to identify the intended error type; additional fields are not
+ * validated. Custom type guards should check any additional fields they need.
+ *
+ * @public
+ * @param value - an unknown value
+ * @param name - the expected error name
+ * @returns true if the value has the expected error name and basic shape
+ * @example
+ * ```ts
+ * class MyError extends CustomErrorBase {
+ *   name = 'MyError' as const;
+ *
+ *   static is(value: unknown): value is MyError {
+ *     return isErrorWithName(value, 'MyError');
+ *   }
+ * }
+ * ```
+ */
+export function isErrorWithName<TName extends string>(
+  value: unknown,
+  name: TName,
+): value is ErrorLike & { name: TName; cause?: ErrorLike } {
+  return (
+    isError(value) &&
+    value.name === name &&
+    (value.cause === undefined || isError(value.cause))
+  );
+}
+
+/**
+ * Asserts that an unknown value is an {@link ErrorLike} object, which guarantees that it's
+ * an object that has at least two string properties: a non-empty `name` and `message`.
+ *
+ * If the value is not an {@link ErrorLike} object, an error is thrown.
+ *
+ * @public
+ * @param value - an unknown value
+ */
+export function assertError(value: unknown): asserts value is ErrorLike {
+  if (!isError(value)) {
+    throw new Error(`Encountered invalid error, got '${value}'`);
+  }
+}
+
+/**
+ * Converts an unknown value to an {@link ErrorLike} object.
+ *
+ * If the value is already an {@link ErrorLike} object, it is returned as-is.
+ * If the value is a string, a new `Error` is created with that string as the message.
+ * For all other values, a new `Error` is created with a message of the form
+ * `unknown error '<stringified>'`.
+ *
+ * @public
+ * @param value - an unknown value
+ * @returns an {@link ErrorLike} object
+ */
+export function toError(value: unknown): ErrorLike {
+  if (isError(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return new Error(value) as ErrorLike;
+  }
+  try {
+    return new Error(`unknown error '${value}'`) as ErrorLike;
+  } catch {
+    return new Error(`unknown error of type '${typeof value}'`) as ErrorLike;
+  }
+}

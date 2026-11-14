@@ -14,61 +14,62 @@
  * limitations under the License.
  */
 
-import React, { PropsWithChildren } from 'react';
-import { ApiRef, ApiHolder, TypesToApiRefs } from './types';
-import { useVersionedContext } from '@backstage/version-bridge';
+import { ComponentType, PropsWithChildren } from 'react';
+import {
+  TypesToApiRefs,
+  useApi,
+  useApiHolder,
+} from '@backstage/frontend-plugin-api';
+import { NotImplementedError } from '@backstage/errors';
 
-export function useApiHolder(): ApiHolder {
-  const versionedHolder = useVersionedContext<{ 1: ApiHolder }>('api-context');
-  if (!versionedHolder) {
-    throw new Error('API context is not available');
-  }
+export { useApiHolder, useApi };
 
-  const apiHolder = versionedHolder.atVersion(1);
-  if (!apiHolder) {
-    throw new Error('ApiContext v1 not available');
-  }
-  return apiHolder;
-}
-
-export function useApi<T>(apiRef: ApiRef<T>): T {
-  const apiHolder = useApiHolder();
-
-  const api = apiHolder.get(apiRef);
-  if (!api) {
-    throw new Error(`No implementation available for ${apiRef}`);
-  }
-  return api;
-}
-
-export function withApis<T>(apis: TypesToApiRefs<T>) {
-  return function withApisWrapper<P extends T>(
-    WrappedComponent: React.ComponentType<P>,
+/**
+ * Wrapper for giving a component an API context.
+ *
+ * @deprecated Wrap class components in a function component that uses `useApi` instead.
+ *
+ * @example
+ * ```tsx
+ * import { errorApiRef, useApi } from '@backstage/frontend-plugin-api';
+ * import { MyClassComponent, MyClassComponentProps } from './MyClassComponent';
+ *
+ * export function MyComponent(props: Omit<MyClassComponentProps, 'errorApi'>) {
+ *   const errorApi = useApi(errorApiRef);
+ *   return <MyClassComponent {...props} errorApi={errorApi} />;
+ * }
+ * ```
+ *
+ * @param apis - APIs for the context.
+ * @public
+ */
+export function withApis<T extends {}>(apis: TypesToApiRefs<T>) {
+  return function withApisWrapper<TProps extends T>(
+    WrappedComponent: ComponentType<TProps>,
   ) {
-    const Hoc = (props: PropsWithChildren<Omit<P, keyof T>>) => {
+    const Hoc = (props: PropsWithChildren<Omit<TProps, keyof T>>) => {
       const apiHolder = useApiHolder();
-
       const impls = {} as T;
 
       for (const key in apis) {
-        if (apis.hasOwnProperty(key)) {
+        if (Object.hasOwn(apis, key)) {
           const ref = apis[key];
-
           const api = apiHolder.get(ref);
           if (!api) {
-            throw new Error(`No implementation available for ${ref}`);
+            throw new NotImplementedError(
+              `No implementation available for ${ref}`,
+            );
           }
           impls[key] = api;
         }
       }
 
-      return <WrappedComponent {...(props as P)} {...impls} />;
+      return <WrappedComponent {...(props as TProps)} {...impls} />;
     };
     const displayName =
       WrappedComponent.displayName || WrappedComponent.name || 'Component';
 
     Hoc.displayName = `withApis(${displayName})`;
-
     return Hoc;
   };
 }

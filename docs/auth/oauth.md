@@ -1,7 +1,6 @@
 ---
 id: oauth
 title: OAuth and OpenID Connect
-# prettier-ignore
 description: This section describes how Backstage allows plugins to request OAuth Access Tokens and OpenID Connect ID Tokens on behalf of the user, to be used for auth to various third party APIs
 ---
 
@@ -85,6 +84,13 @@ provider. The Access and possibly ID Token is then handed back to the main
 Backstage page via `postMessage`. If the OAuth provider implements offline
 refresh, a refresh token will be stored in an HTTP-only cookie scoped to the
 specific provider in the `auth-backend` plugin.
+
+In browsers that support the Web Locks API, refresh requests for the same auth
+provider endpoint run one at a time across tabs on the same frontend origin.
+This allows each request to use the updated refresh-token cookie from the
+previous response, preventing concurrent exchanges of a rotating refresh token.
+Web Locks require a secure context, such as HTTPS or localhost. In browsers
+without Web Locks, refresh requests can still run concurrently across tabs.
 
 To protect against certain attacks, the above flow also includes a simple nonce
 check and a lightweight CSRF protection header. The nonce check is done to

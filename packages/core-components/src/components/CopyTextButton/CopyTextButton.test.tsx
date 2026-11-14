@@ -14,14 +14,11 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { fireEvent } from '@testing-library/react';
-import { act } from 'react-dom/test-utils';
-import { renderInTestApp } from '@backstage/test-utils';
+import { act, fireEvent } from '@testing-library/react';
+import { renderInTestApp, TestApiProvider } from '@backstage/test-utils';
 import { CopyTextButton } from './CopyTextButton';
-import { ApiProvider, ApiRegistry } from '@backstage/core-app-api';
-import { errorApiRef, ErrorApi } from '@backstage/core-plugin-api';
-import { useCopyToClipboard } from 'react-use';
+import { errorApiRef } from '@backstage/core-plugin-api';
+import { default as useCopyToClipboardUnmocked } from 'react-use/esm/useCopyToClipboard';
 
 jest.mock('popper.js', () => {
   const PopperJS = jest.requireActual('popper.js');
@@ -34,16 +31,10 @@ jest.mock('popper.js', () => {
   };
 });
 
-jest.mock('react-use', () => {
-  const original = jest.requireActual('react-use');
-
-  return {
-    ...original,
-    useCopyToClipboard: jest
-      .fn()
-      .mockImplementation(original.useCopyToClipboard),
-  };
-});
+const useCopyToClipboard = jest.mocked(useCopyToClipboardUnmocked);
+jest.mock('react-use/esm/useCopyToClipboard', () =>
+  jest.fn().mockImplementation(() => [{ noUserInteraction: false }, jest.fn()]),
+);
 
 const props = {
   text: 'mockText',
@@ -51,60 +42,119 @@ const props = {
   tooltipText: 'mockTooltip',
 };
 
-const apiRegistry = ApiRegistry.from([
-  [
-    errorApiRef,
-    {
-      post: jest.fn(),
-      error$: jest.fn(),
-    } as ErrorApi,
-  ],
-]);
+const mockErrorApi = {
+  post: jest.fn(),
+  error$: jest.fn(),
+};
+const apis = [[errorApiRef, mockErrorApi] as const] as const;
 
 describe('<CopyTextButton />', () => {
   it('renders without exploding', async () => {
-    const { getByTitle, queryByText } = await renderInTestApp(
-      <ApiProvider apis={apiRegistry}>
+    const { queryByText, getByLabelText } = await renderInTestApp(
+      <TestApiProvider apis={apis}>
         <CopyTextButton {...props} />
-      </ApiProvider>,
+      </TestApiProvider>,
     );
-    expect(getByTitle('mockTooltip')).toBeInTheDocument();
     expect(queryByText('mockTooltip')).not.toBeInTheDocument();
+    expect(getByLabelText('Copy text')).toBeInTheDocument();
   });
 
   it('displays tooltip and copy the text on click', async () => {
     jest.useFakeTimers();
 
-    const spy = useCopyToClipboard as jest.Mock;
+    const spy = useCopyToClipboard;
     const copy = jest.fn();
-    spy.mockReturnValue([{}, copy]);
+    spy.mockReturnValue([{ noUserInteraction: false }, copy]);
 
     const rendered = await renderInTestApp(
-      <ApiProvider apis={apiRegistry}>
+      <TestApiProvider apis={apis}>
         <CopyTextButton {...props} />
-      </ApiProvider>,
+      </TestApiProvider>,
     );
-    const button = rendered.getByTitle('mockTooltip');
+    const button = rendered.getByLabelText('Copy text');
     fireEvent.click(button);
+    expect(copy).toHaveBeenCalledWith('mockText');
+    rendered.getByText('mockTooltip');
     act(() => {
       jest.runAllTimers();
     });
-    expect(copy).toHaveBeenCalledWith('mockText');
-    rendered.getByText('mockTooltip');
+    expect(rendered.queryByText('mockTooltip')).not.toBeInTheDocument();
+    jest.useRealTimers();
+  });
+
+  it('does not show the tooltip on hover, only after a click', async () => {
+    jest.useFakeTimers();
+
+    const rendered = await renderInTestApp(
+      <TestApiProvider apis={apis}>
+        <CopyTextButton {...props} />
+      </TestApiProvider>,
+    );
+
+    const button = rendered.getByLabelText('Copy text');
+
+    // React Aria only treats a hover as pointer-driven (as opposed to a
+    // synthetic one, e.g. from touch or keyboard) once it has observed an
+    // actual pointermove somewhere in the document, so trigger one before
+    // entering the button - otherwise the trigger's hover handling never
+    // engages at all, and the assertion below would pass regardless of
+    // whether the fix is present.
+    fireEvent.pointerMove(document.body, {
+      pointerType: 'mouse',
+      pointerId: 1,
+    });
+    fireEvent.pointerEnter(button, { pointerType: 'mouse', pointerId: 1 });
+
+    // React Aria's TooltipTrigger shows a tooltip on hover/focus after its
+    // own delay, independently of the isOpen/onOpenChange control layered on
+    // top of it. Advance well past that delay to make sure a hover-triggered
+    // open isn't slipping through.
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(rendered.queryByText('mockTooltip')).not.toBeInTheDocument();
+
+    fireEvent.pointerLeave(button, { pointerType: 'mouse', pointerId: 1 });
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(rendered.queryByText('mockTooltip')).not.toBeInTheDocument();
+
     jest.useRealTimers();
   });
 
   it('reports copy errors', async () => {
-    const spy = useCopyToClipboard as jest.Mock;
+    const spy = useCopyToClipboard;
 
     const error = new Error('just an error');
-    spy.mockReturnValue([{ error }, jest.fn()]);
+    spy.mockReturnValue([{ noUserInteraction: false, error }, jest.fn()]);
 
     await renderInTestApp(
-      <ApiProvider apis={apiRegistry}>
+      <TestApiProvider apis={apis}>
         <CopyTextButton {...props} />
-      </ApiProvider>,
+      </TestApiProvider>,
     );
-    expect(apiRegistry.get(errorApiRef)?.post).toHaveBeenCalledWith(error);
+    expect(mockErrorApi.post).toHaveBeenCalledWith(error);
+  });
+
+  it('aria-label', async () => {
+    const { getByLabelText } = await renderInTestApp(
+      <TestApiProvider apis={apis}>
+        <CopyTextButton {...props} aria-label="text for aria-label" />
+      </TestApiProvider>,
+    );
+    expect(getByLabelText('text for aria-label')).toBeInTheDocument();
+  });
+
+  it('forwards variant to the button element', async () => {
+    const { getByLabelText } = await renderInTestApp(
+      <TestApiProvider apis={apis}>
+        <CopyTextButton {...props} variant="secondary" />
+      </TestApiProvider>,
+    );
+    expect(getByLabelText('Copy text')).toHaveAttribute(
+      'data-variant',
+      'secondary',
+    );
   });
 });

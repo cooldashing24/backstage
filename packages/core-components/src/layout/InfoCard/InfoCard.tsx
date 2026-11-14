@@ -14,21 +14,18 @@
  * limitations under the License.
  */
 
-import React, { ReactNode } from 'react';
-import {
-  Card,
-  CardActions,
-  CardContent,
-  CardHeader,
-  CardHeaderProps,
-  Divider,
-  withStyles,
-  makeStyles,
-} from '@material-ui/core';
+import Card from '@material-ui/core/Card';
+import CardActions from '@material-ui/core/CardActions';
+import CardContent from '@material-ui/core/CardContent';
+import CardHeader, { CardHeaderProps } from '@material-ui/core/CardHeader';
+import Divider from '@material-ui/core/Divider';
+import { makeStyles, withStyles } from '@material-ui/core/styles';
 import classNames from 'classnames';
-import { ErrorBoundary, ErrorBoundaryProps } from '../ErrorBoundary';
+import { ReactNode } from 'react';
 import { BottomLink, BottomLinkProps } from '../BottomLink';
+import { ErrorBoundary, ErrorBoundaryProps } from '../ErrorBoundary';
 
+/** @public */
 export type InfoCardClassKey =
   | 'noPadding'
   | 'header'
@@ -46,11 +43,15 @@ const useStyles = makeStyles(
         paddingBottom: 0,
       },
     },
+    contentAlignBottom: {
+      display: 'flex',
+      alignItems: 'self-end',
+    },
     header: {
       padding: theme.spacing(2, 2, 2, 2.5),
     },
     headerTitle: {
-      fontWeight: 700,
+      fontWeight: theme.typography.fontWeightBold,
     },
     headerSubheader: {
       paddingTop: theme.spacing(1),
@@ -58,10 +59,14 @@ const useStyles = makeStyles(
     headerAvatar: {},
     headerAction: {},
     headerContent: {},
+    subheader: {
+      display: 'flex',
+    },
   }),
   { name: 'BackstageInfoCard' },
 );
 
+/** @public */
 export type CardActionsTopRightClassKey = 'root';
 
 const CardActionsTopRight = withStyles(
@@ -91,6 +96,10 @@ const VARIANT_STYLES = {
       flexDirection: 'column',
       height: 'calc(100% - 10px)', // for pages without content header
       marginBottom: '10px',
+      breakInside: 'avoid-page',
+      '@media print': {
+        height: 'auto',
+      },
     },
   },
   cardContent: {
@@ -103,6 +112,7 @@ const VARIANT_STYLES = {
   },
 };
 
+/** @public */
 export type InfoCardVariants = 'flex' | 'fullHeight' | 'gridItem';
 
 /**
@@ -121,9 +131,9 @@ export type InfoCardVariants = 'flex' | 'fullHeight' | 'gridItem';
  * When the InfoCard is displayed as a grid item within a grid, you may want items to have the same height for all items.
  * Set to the 'gridItem' variant to display the InfoCard with full height suitable for Grid:
  *
- *   <InfoCard variant="gridItem">...</InfoCard>
+ * `<InfoCard variant="gridItem">...</InfoCard>`
  */
-type Props = {
+export type Props = {
   title?: ReactNode;
   subheader?: ReactNode;
   divider?: boolean;
@@ -132,9 +142,11 @@ type Props = {
   slackChannel?: string;
   errorBoundaryProps?: ErrorBoundaryProps;
   variant?: InfoCardVariants;
+  alignContent?: 'normal' | 'bottom';
   children?: ReactNode;
   headerStyle?: object;
   headerProps?: CardHeaderProps;
+  icon?: ReactNode;
   action?: ReactNode;
   actionsClassName?: string;
   actions?: ReactNode;
@@ -143,8 +155,15 @@ type Props = {
   className?: string;
   noPadding?: boolean;
   titleTypographyProps?: object;
+  subheaderTypographyProps?: object;
 };
 
+/**
+ * Material-ui card with header , content and actions footer
+ *
+ * @public
+ *
+ */
 export function InfoCard(props: Props): JSX.Element {
   const {
     title,
@@ -154,9 +173,11 @@ export function InfoCard(props: Props): JSX.Element {
     slackChannel,
     errorBoundaryProps,
     variant,
+    alignContent = 'normal',
     children,
     headerStyle,
     headerProps,
+    icon,
     action,
     actionsClassName,
     actions,
@@ -165,6 +186,7 @@ export function InfoCard(props: Props): JSX.Element {
     className,
     noPadding,
     titleTypographyProps,
+    subheaderTypographyProps,
   } = props;
   const classes = useStyles();
   /**
@@ -178,16 +200,29 @@ export function InfoCard(props: Props): JSX.Element {
     variants.forEach(name => {
       calculatedStyle = {
         ...calculatedStyle,
-        ...VARIANT_STYLES.card[name as keyof typeof VARIANT_STYLES['card']],
+        ...VARIANT_STYLES.card[name as keyof (typeof VARIANT_STYLES)['card']],
       };
       calculatedCardStyle = {
         ...calculatedCardStyle,
         ...VARIANT_STYLES.cardContent[
-          name as keyof typeof VARIANT_STYLES['cardContent']
+          name as keyof (typeof VARIANT_STYLES)['cardContent']
         ],
       };
     });
   }
+
+  const cardSubTitle = () => {
+    if (!subheader && !icon) {
+      return null;
+    }
+
+    return (
+      <div data-testid="info-card-subheader">
+        {subheader && <div className={classes.subheader}>{subheader}</div>}
+        {icon}
+      </div>
+    );
+  };
 
   const errProps: ErrorBoundaryProps =
     errorBoundaryProps || (slackChannel ? { slackChannel } : {});
@@ -198,7 +233,7 @@ export function InfoCard(props: Props): JSX.Element {
         {title && (
           <CardHeader
             classes={{
-              root: classes.header,
+              root: classNames(classes.header),
               title: classes.headerTitle,
               subheader: classes.headerSubheader,
               avatar: classes.headerAvatar,
@@ -206,10 +241,11 @@ export function InfoCard(props: Props): JSX.Element {
               content: classes.headerContent,
             }}
             title={title}
-            subheader={subheader}
+            subheader={cardSubTitle()}
             action={action}
             style={{ ...headerStyle }}
             titleTypographyProps={titleTypographyProps}
+            subheaderTypographyProps={subheaderTypographyProps}
             {...headerProps}
           />
         )}
@@ -220,6 +256,7 @@ export function InfoCard(props: Props): JSX.Element {
         <CardContent
           className={classNames(cardClassName, {
             [classes.noPadding]: noPadding,
+            [classes.contentAlignBottom]: alignContent === 'bottom',
           })}
           style={calculatedCardStyle}
         >

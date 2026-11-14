@@ -16,6 +16,8 @@
 
 /**
  * Common analytics context attributes.
+ *
+ * @public
  */
 export type CommonAnalyticsContext = {
   /**
@@ -35,14 +37,10 @@ export type CommonAnalyticsContext = {
 };
 
 /**
- * Allow arbitrary scalar values as context attributes too.
+ * Analytics context envelope.
+ *
+ * @public
  */
-export type AnyAnalyticsContext = {
+export type AnalyticsContextValue = CommonAnalyticsContext & {
   [param in string]: string | boolean | number | undefined;
 };
-
-/**
- * Analytics context envelope.
- */
-export type AnalyticsContextValue = CommonAnalyticsContext &
-  AnyAnalyticsContext;

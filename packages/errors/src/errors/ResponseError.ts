@@ -14,32 +14,62 @@
  * limitations under the License.
  */
 
+import { deserializeError } from '../serialization/error';
 import {
-  parseErrorResponse,
-  ErrorResponse,
-  deserializeError,
-} from '../serialization';
+  ErrorResponseBody,
+  parseErrorResponseBody,
+} from '../serialization/response';
+import { ConsumedResponse } from './types';
+import { isErrorWithName } from './assertion';
 
 /**
  * An error thrown as the result of a failed server request.
  *
- * The server is expected to respond on the ErrorResponse format.
+ * The server is expected to respond on the ErrorResponseBody format.
  *
  * @public
  */
 export class ResponseError extends Error {
+  /**
+   * Checks the error name and basic shape, including shallow checks of the
+   * response, body, cause, and status fields. Does not validate nested data.
+   * Works across package copies without requiring a shared constructor.
+   * A matching name is assumed to identify this error type.
+   *
+   * @example
+   * ```ts
+   * if (ResponseError.is(error)) {
+   *   console.log(error.statusCode, error.cause.message);
+   * }
+   * ```
+   */
+  static is(value: unknown): value is ResponseError {
+    return (
+      isErrorWithName(value, 'ResponseError') &&
+      typeof value.response === 'object' &&
+      value.response !== null &&
+      !Array.isArray(value.response) &&
+      typeof value.body === 'object' &&
+      value.body !== null &&
+      !Array.isArray(value.body) &&
+      value.cause !== undefined &&
+      typeof value.statusCode === 'number' &&
+      typeof value.statusText === 'string'
+    );
+  }
+
   /**
    * The actual response, as seen by the client.
    *
    * Note that the body of this response is always consumed. Its parsed form is
    * in the `body` field.
    */
-  readonly response: Response;
+  readonly response: ConsumedResponse;
 
   /**
    * The parsed JSON error body, as sent by the server.
    */
-  readonly data: ErrorResponse;
+  readonly body: ErrorResponseBody;
 
   /**
    * The Error cause, as seen by the remote server. This is parsed out of the
@@ -52,6 +82,9 @@ export class ResponseError extends Error {
    */
   readonly cause: Error;
 
+  readonly statusCode: number;
+
+  readonly statusText: string;
   /**
    * Constructs a ResponseError based on a failed response.
    *
@@ -59,12 +92,14 @@ export class ResponseError extends Error {
    * function consumes the body of the response, and assumes that it hasn't
    * been consumed before.
    */
-  static async fromResponse(response: Response): Promise<ResponseError> {
-    const data = await parseErrorResponse(response);
+  static async fromResponse(
+    response: ConsumedResponse & { text(): Promise<string> },
+  ): Promise<ResponseError> {
+    const data = await parseErrorResponseBody(response);
 
-    const status = data.response.statusCode || response.status;
-    const statusText = data.error.name || response.statusText;
-    const message = `Request failed with ${status} ${statusText}`;
+    const statusCode = data.response.statusCode || response.status;
+    const statusText = response.statusText;
+    const message = `Request failed with ${statusCode} ${statusText}`;
     const cause = deserializeError(data.error);
 
     return new ResponseError({
@@ -72,19 +107,26 @@ export class ResponseError extends Error {
       response,
       data,
       cause,
+      statusCode,
+      statusText,
     });
   }
 
-  constructor(props: {
+  private constructor(opts: {
     message: string;
-    response: Response;
-    data: ErrorResponse;
+    response: ConsumedResponse;
+    data: ErrorResponseBody;
     cause: Error;
+    statusCode: number;
+    statusText: string;
   }) {
-    super(props.message);
+    super(opts.message);
+
     this.name = 'ResponseError';
-    this.response = props.response;
-    this.data = props.data;
-    this.cause = props.cause;
+    this.response = opts.response;
+    this.body = opts.data;
+    this.cause = opts.cause;
+    this.statusCode = opts.statusCode;
+    this.statusText = opts.statusText;
   }
 }

@@ -13,22 +13,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import React from 'react';
+import { ReactNode, MouseEventHandler } from 'react';
 import classnames from 'classnames';
-import { makeStyles, Link } from '@material-ui/core';
+import { makeStyles } from '@material-ui/core/styles';
 import LinkIcon from '@material-ui/icons/Link';
-import { Link as RouterLink } from '../Link';
+import { Link } from '../Link';
+import Box from '@material-ui/core/Box';
+import Typography from '@material-ui/core/Typography';
 
+/**
+ * @deprecated Use the replacement described in {@link IconLinkVertical} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type IconLinkVerticalProps = {
   color?: 'primary' | 'secondary';
   disabled?: boolean;
   href?: string;
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   label: string;
-  onClick?: React.MouseEventHandler<HTMLAnchorElement>;
+  onClick?: MouseEventHandler<HTMLAnchorElement>;
   title?: string;
 };
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link IconLinkVertical} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type IconLinkVerticalClassKey =
   | 'link'
   | 'disabled'
@@ -45,7 +56,7 @@ const useIconStyles = makeStyles(
       textAlign: 'center',
     },
     disabled: {
-      color: 'gray',
+      color: theme.palette.text.secondary,
       cursor: 'default',
     },
     primary: {
@@ -55,15 +66,20 @@ const useIconStyles = makeStyles(
       color: theme.palette.secondary.main,
     },
     label: {
-      fontSize: '0.7rem',
       textTransform: 'uppercase',
-      fontWeight: 600,
+      fontWeight: theme.typography.fontWeightBold,
       letterSpacing: 1.2,
     },
   }),
   { name: 'BackstageIconLinkVertical' },
 );
 
+/**
+ * @public
+ * @deprecated Compose `Link`, `Text`, and layout from `@backstage/ui` with
+ * an icon instead. Pass the destination as `href` and use `isDisabled` for
+ * disabled links.
+ */
 export function IconLinkVertical({
   color = 'primary',
   disabled = false,
@@ -77,14 +93,16 @@ export function IconLinkVertical({
 
   if (disabled) {
     return (
-      <Link
-        title={title}
-        className={classnames(classes.link, classes.disabled)}
-        underline="none"
-      >
+      <Box title={title} className={classnames(classes.link, classes.disabled)}>
         {icon}
-        <span className={classes.label}>{label}</span>
-      </Link>
+        <Typography
+          variant="caption"
+          component="span"
+          className={classes.label}
+        >
+          {label}
+        </Typography>
+      </Box>
     );
   }
 
@@ -93,11 +111,12 @@ export function IconLinkVertical({
       title={title}
       className={classnames(classes.link, classes[color])}
       to={href}
-      component={RouterLink}
       onClick={onClick}
     >
       {icon}
-      <span className={classes.label}>{label}</span>
+      <Typography variant="caption" component="span" className={classes.label}>
+        {label}
+      </Typography>
     </Link>
   );
 }

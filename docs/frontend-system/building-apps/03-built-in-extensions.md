@@ -1,0 +1,226 @@
+---
+id: built-in-extensions
+title: App Built-in Extensions
+sidebar_label: Built-in extensions
+description: Configuring or overriding built-in extensions
+---
+
+Built-in extensions are default app extensions that are always installed when you create a Backstage app.
+
+## Disable built-in extensions
+
+All built-in extensions can be disabled in the same way as you disable any other extension:
+
+```yaml title="app-config.yaml"
+extensions:
+  # Disabling the built-in app root alert element
+  - app-root-element:app/alert-display: false
+```
+
+:::warning
+Be careful when disabling built-in extensions, as there may be other extensions depending on their existence. For example, the built-in "alert display" extension displays messages retrieved via [AlertApi](https://backstage.io/api/stable/types/_backstage_core-plugin-api.index.AlertApi.html) and disabling this extension will cause the application to no longer display these messages unless you install another extension that displays messages from `AlertApi`.
+:::
+
+## Override built-in extensions
+
+You can override any built-in extension whenever their customizations, whether through configuration or input, do not meet a use case for your Backstage instance. Check out [this](../architecture/25-extension-overrides.md) documentation on how to override application extensions.
+
+:::warning
+Be aware there could be some implementation requirements to properly override an built-in extension, such as using same apis and do not remove inputs or configurations otherwise you can cause a side effect in other parts of the system that expects same minimal behavior.
+:::
+
+## Default built-in extensions
+
+### App
+
+This extension is the first extension attached to the extension tree. It is responsible for receiving the application's root element and other Frontend framework inputs.
+
+#### Inputs
+
+| Name         | Description                | Type                                                                                                                                                     | Optional | Default                                                   | Blueprint                                                                                                                             |
+| ------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| root         | The app root element.      | [coreExtensionData.reactElement](https://backstage.io/docs/reference/frontend-plugin-api.coreextensiondata)                                              | false    | The [`App/Root`](#app-root) extension output.             | No blueprint available, configure or override the [`App/Root`](#app-root) extension.                                                  |
+| apis         | The app apis factories.    | [ApiBlueprint.dataRefs.factory](https://backstage.io/api/stable/variables/_backstage_frontend-plugin-api.index.ApiBlueprint.html)                        | false    | See [default apis](#default-apis-extensions).             | [ApiBlueprint](https://backstage.io/api/stable/variables/_backstage_frontend-plugin-api.index.ApiBlueprint.html)                      |
+| themes       | The app themes list.       | [ThemeBlueprint.dataRefs.theme](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.ThemeBlueprint.html)                               | false    | See [default themes](#default-theme-extensions).          | [ThemeBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.ThemeBlueprint.html)                           |
+| components   | The app components list.   | [SwappableComponentBlueprint.dataRefs.component](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.SwappableComponentBlueprint.html) | false    | See [default components](#default-components-extensions). | [SwappableComponentBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.SwappableComponentBlueprint.html) |
+| translations | The app translations list. | [TranslationBlueprint.dataRefs.translation](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.TranslationBlueprint.html)             | false    | -                                                         | [TranslationBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.TranslationBlueprint.html)               |
+| icons        | The app icons list.        | [IconBundleBlueprint.dataRefs.icons](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.IconBundleBlueprint.html)                     | true     | -                                                         | [IconBundleBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.IconBundleBlueprint.html)                 |
+
+#### Default theme extensions
+
+Extensions that provides default theme inputs for the `App` extension.
+
+| kind  | namespace | name  |        id         |
+| :---: | :-------: | :---: | :---------------: |
+| theme |    app    | light | `theme:app/light` |
+| theme |    app    | dark  | `theme:app/dark`  |
+
+#### Default components extensions
+
+Extensions that provides default components inputs for the `App` extension.
+
+|    kind    | namespace |           name            |                     id                     |
+| :--------: | :-------: | :-----------------------: | :----------------------------------------: |
+| components |    app    |       core-progress       |       `components:app/core-progress`       |
+| components |    app    | core-not-found-error-page | `components:app/core-not-found-error-page` |
+| components |    app    |    core-error-display     |    `components:app/core-error-display`     |
+
+#### Default apis extensions
+
+Extensions that provides default apis inputs for the `App` extension.
+
+| kind |         namespace          | name |                id                |
+| :--: | :------------------------: | :--: | :------------------------------: |
+| api  |       core.discovery       |  -   |       `api:core.discovery`       |
+| api  |         core.alert         |  -   |         `api:core.alert`         |
+| api  |       core.analytics       |  -   |       `api:core.analytics`       |
+| api  |         core.error         |  -   |         `api:core.error`         |
+| api  |        core.storage        |  -   |        `api:core.storage`        |
+| api  |         core.fetch         |  -   |         `api:core.fetch`         |
+| api  |     core.oauthrequest      |  -   |     `api:core.oauthrequest`      |
+| api  |      core.auth.google      |  -   |      `api:core.auth.google`      |
+| api  |    core.auth.microsoft     |  -   |    `api:core.auth.microsoft`     |
+| api  |      core.auth.github      |  -   |      `api:core.auth.github`      |
+| api  |       core.auth.okta       |  -   |       `api:core.auth.okta`       |
+| api  |      core.auth.gitlab      |  -   |      `api:core.auth.gitlab`      |
+| api  |     core.auth.onelogin     |  -   |     `api:core.auth.onelogin`     |
+| api  |    core.auth.bitbucket     |  -   |    `api:core.auth.bitbucket`     |
+| api  | core.auth.bitbucket-server |  -   | `api:core.auth.bitbucket-server` |
+| api  |    core.auth.atlassian     |  -   |    `api:core.auth.atlassian`     |
+| api  |   plugin.permission.api    |  -   |   `api:plugin.permission.api`    |
+
+### App root
+
+This is the extension that creates the app root element, so it renders root level components such as the sign-in page and layout.
+
+#### Inputs
+
+| Name       | Description                                                                             | Requirements                                                                                                                                                             | Optional | Default                                                                                                                                                                                      | Blueprint                                                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| signInPage | A React component that should render the app sign-in page.                              | Should call the `onSignInSuccess` prop when the user has been successfully authorized, otherwise the user will not be correctly redirected to the application home page. | true     | The default `AppRoot` extension does not use a default component for this input, it bypasses the user authentication check and always renders all routes when a login page is not installed. | [SignInPageBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.SignInPageBlueprint.html)         |
+| children   | A React component that renders the app sidebar and main content in a particular layout. | -                                                                                                                                                                        | true     | The [`App/Layout`](#app-layout) extension output.                                                                                                                                            | No blueprint available, configure or override the [`App/Layout`](#app-layout) extension.                                      |
+| elements   | React elements to be rendered outside of the app layout, such as shared popups.         | -                                                                                                                                                                        | false    | See [default elements](#default-app-root-elements-extensions).                                                                                                                               | [AppRootElementBlueprint](https://backstage.io/docs/reference/frontend-plugin-api.approotelementblueprint)                    |
+| wrappers   | React components that should wrap the root element.                                     | -                                                                                                                                                                        | true     | -                                                                                                                                                                                            | [AppRootWrapperBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.AppRootWrapperBlueprint.html) |
+
+:::note
+The app root takes no router input. The app owns browser history and exposes it
+as `AppHistoryApi`. Existing pages retain implicit React Router v6 routing while
+they migrate. Development warnings identify use of this fallback. A page can render a [page router](../building-plugins/10-page-routers.md)
+adapter inside its lazily loaded component. See
+[Scoped plugin routing](../architecture/36-routes.md#scoped-plugin-routing).
+:::
+
+#### Default app root elements extensions
+
+##### Alert Display
+
+An app root element extension that displays messages posted via the [`AlertApi`](https://backstage.io/api/stable/types/_backstage_core-plugin-api.index.AlertApi.html).
+
+|       kind       | namespace |     name      |                  id                  |
+| :--------------: | :-------: | :-----------: | :----------------------------------: |
+| app-root-element |    app    | alert-display | `app-root-element:app/alert-display` |
+
+###### Configurations
+
+| Key                  | Type   | Default value | Description                                                  |
+| -------------------- | ------ | ------------- | ------------------------------------------------------------ |
+| `transientTimeoutMs` | number | 5000          | Time in milliseconds that a transient alert remains visible. |
+
+Messages appear as toasts at the bottom center of the screen. Remove the `anchorOrigin` setting from this extension's configuration if present; it is no longer supported and had no effect on toast positioning.
+
+###### Override or disable the extension
+
+If you do not want to display alerts, disable this extension or if the available settings do not meet your needs, override this extension.
+
+:::warning
+The built-in "alert display" extension displays messages retrieved via [AlertApi](https://backstage.io/api/stable/types/_backstage_core-plugin-api.index.AlertApi.html) and disabling this extension will cause the application to no longer display these messages unless you install another extension that displays messages from `AlertApi`.
+:::
+
+##### OAuth Request Dialog
+
+An app root element extension that renders the oauth request dialog, it is based on the [oauthRequestApi](https://backstage.io/api/stable/types/_backstage_core-plugin-api.index.OAuthRequestApi.html).
+
+|       kind       | namespace |         name         |                     id                      |
+| :--------------: | :-------: | :------------------: | :-----------------------------------------: |
+| app-root-element |    app    | oauth-request-dialog | `app-root-element:app/oauth-request-dialog` |
+
+### App layout
+
+Renders the app's sidebar and content in a specific layout.
+
+| kind | namespace |  name  |      id      |
+| :--: | :-------: | :----: | :----------: |
+|  -   |    app    | layout | `app/layout` |
+
+#### Inputs
+
+| Name    | Description                                   | Type                                                                                                                                    | Optional | Default | Blueprint                            |
+| ------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | ------------------------------------ |
+| nav     | A React element that renders the app sidebar. | [coreExtensionData.reactElement](https://backstage.io/api/stable/variables/_backstage_frontend-plugin-api.index.coreExtensionData.html) | false    | -       | Override the `App/Nav` extension.    |
+| content | A React element that renders the app content. | [coreExtensionData.reactElement](https://backstage.io/api/stable/variables/_backstage_frontend-plugin-api.index.coreExtensionData.html) | false    | -       | Override the `App/Routes` extension. |
+
+### App nav
+
+Extension responsible for rendering the logo and items in the app's sidebar.
+
+| kind | namespace | name |    id     |
+| :--: | :-------: | :--: | :-------: |
+|  -   |    app    | nav  | `app/nav` |
+
+#### Inputs
+
+| Name    | Description                                  | Type                                                                                                                                     | Optional | Default | Blueprint                                                                                                             |
+| ------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| content | Overrides the default content of the navbar. | [NavContentBlueprint.dataRefs.component](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.NavContentBlueprint.html) | true     | -       | [NavContentBlueprint](https://backstage.io/api/stable/variables/_backstage_plugin-app-react.NavContentBlueprint.html) |
+
+### App routes
+
+Renders a route element for each route received as input and a `NotFoundErrorPage` component.
+
+| kind | namespace |  name  |      id      |
+| :--: | :-------: | :----: | :----------: |
+|  -   |    app    | routes | `app/routes` |
+
+#### Caveats
+
+Be careful when overriding this extension, as to do so correctly you must consider these implementation requirements:
+
+- This extension matches the app's top-level routes and resolves route refs to
+  paths. It does not render page content, so replacing it does not let you
+  change the router library used by a page or sub-page. A page picks its own
+  routing library by rendering a
+  [page router](../building-plugins/10-page-routers.md) adapter inside its
+  `loader` — there is no extension input to attach one to;
+- Don't remove configs or inputs, just extend these things yourself with optional new options, otherwise it will cause breaking changes for extensions like `PageBlueprint` that depend on this type of inputs;
+- Remember to use the route refs for getting paths dynamically, otherwise if an adopter modifies a path through configuration, the route is not going to point to the configured path;
+- Adopters expect to be able to customize the `NotFoundErrorPage` component via Components API, you should render this component for routes not configured.
+
+#### Configurations
+
+| Key         | Type                             | Default value | Description                                                          |
+| ----------- | -------------------------------- | ------------- | -------------------------------------------------------------------- |
+| `redirects` | `{ from: string, to: string }[]` | -             | A list of URL redirects. Navigation to `from` will redirect to `to`. |
+
+##### Configuring redirects
+
+You can configure redirects for the `app/routes` extension to automatically redirect users from one path to another. This is useful when restructuring your app's routes, for example after moving or renaming plugin pages.
+
+```yaml title="app-config.yaml"
+app:
+  extensions:
+    - app/routes:
+        config:
+          redirects:
+            - from: /old-path
+              to: /new-path
+            - from: /legacy/page
+              to: /updated/page
+```
+
+Redirects are matched before any regular routes and use the [`replace`](https://developer.mozilla.org/en-US/docs/Web/API/History/replaceState) strategy, so the old path will not appear in the browser history.
+
+#### Inputs
+
+| Name   | Description             | Type                                                                                                                         | Optional | Default | Blueprint                                                                              |
+| ------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | -------------------------------------------------------------------------------------- |
+| routes | The route objects list. | `{ path: coreExtensionData.routePath, ref: coreExtensionData.routeRef.optional(), element: coreExtensionData.reactElement }` | false    | -       | [PageBlueprint](https://backstage.io/docs/reference/frontend-plugin-api.pageblueprint) |

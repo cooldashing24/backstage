@@ -21,7 +21,7 @@ import {
   createRoutableExtension,
   createRouteRef,
   discoveryApiRef,
-  identityApiRef,
+  fetchApiRef,
 } from '@backstage/core-plugin-api';
 import {
   scmAuthApiRef,
@@ -31,10 +31,15 @@ import { catalogApiRef } from '@backstage/plugin-catalog-react';
 import { catalogImportApiRef, CatalogImportClient } from './api';
 
 export const rootRouteRef = createRouteRef({
-  path: '',
-  title: 'catalog-import',
+  id: 'catalog-import',
 });
 
+/**
+ * A plugin that helps the user in importing projects and YAML files into the
+ * catalog.
+ *
+ * @public
+ */
 export const catalogImportPlugin = createPlugin({
   id: 'catalog-import',
   apis: [
@@ -43,7 +48,7 @@ export const catalogImportPlugin = createPlugin({
       deps: {
         discoveryApi: discoveryApiRef,
         scmAuthApi: scmAuthApiRef,
-        identityApi: identityApiRef,
+        fetchApi: fetchApiRef,
         scmIntegrationsApi: scmIntegrationsApiRef,
         catalogApi: catalogApiRef,
         configApi: configApiRef,
@@ -51,7 +56,7 @@ export const catalogImportPlugin = createPlugin({
       factory: ({
         discoveryApi,
         scmAuthApi,
-        identityApi,
+        fetchApi,
         scmIntegrationsApi,
         catalogApi,
         configApi,
@@ -60,7 +65,7 @@ export const catalogImportPlugin = createPlugin({
           discoveryApi,
           scmAuthApi,
           scmIntegrationsApi,
-          identityApi,
+          fetchApi,
           catalogApi,
           configApi,
         }),
@@ -71,6 +76,11 @@ export const catalogImportPlugin = createPlugin({
   },
 });
 
+/**
+ * The page for importing projects and YAML files into the catalog.
+ *
+ * @public
+ */
 export const CatalogImportPage = catalogImportPlugin.provide(
   createRoutableExtension({
     name: 'CatalogImportPage',

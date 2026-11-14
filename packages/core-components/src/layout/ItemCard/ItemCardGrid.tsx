@@ -13,10 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import Box from '@material-ui/core/Box';
+import {
+  createStyles,
+  makeStyles,
+  Theme,
+  WithStyles,
+} from '@material-ui/core/styles';
+import { ReactNode } from 'react';
 
-import { createStyles, makeStyles, Theme, WithStyles } from '@material-ui/core';
-import React from 'react';
-
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link ItemCardGrid} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type ItemCardGridClassKey = 'root';
 
 const styles = (theme: Theme) =>
@@ -31,34 +41,42 @@ const styles = (theme: Theme) =>
 
 const useStyles = makeStyles(styles, { name: 'BackstageItemCardGrid' });
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link ItemCardGrid} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type ItemCardGridProps = Partial<WithStyles<typeof styles>> & {
   /**
    * The Card items of the grid.
    */
-  children?: React.ReactNode;
+  children?: ReactNode;
 };
 
 /**
  * A default grid to use when arranging "item cards" - cards that let users
  * select among several options.
  *
- * The immediate children are expected to be MUI Card components.
+ * @remarks
+ * The immediate children are expected to be Material UI Card components.
  *
  * Styles for the grid can be overridden using the `classes` prop, e.g.:
  *
- * <code>
- *   <ItemCardGrid title="Hello" classes={{ root: myClassName }} />
- * </code>
+ * `<ItemCardGrid title="Hello" classes={{ root: myClassName }} />`
  *
  * This can be useful for e.g. overriding gridTemplateColumns to adapt the
  * minimum size of the cells to fit the content better.
+ *
+ * @public
+ * @deprecated Use `Grid.Root` from `@backstage/ui` or CSS grid instead. Configure
+ * responsive columns, gaps, and equal row heights to suit your cards.
  */
 export function ItemCardGrid(props: ItemCardGridProps) {
   const { children, ...otherProps } = props;
   const classes = useStyles(otherProps);
   return (
-    <div className={classes.root} {...otherProps}>
+    <Box className={classes.root} {...otherProps}>
       {children}
-    </div>
+    </Box>
   );
 }

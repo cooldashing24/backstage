@@ -1,0 +1,720 @@
+/*
+ * Copyright 2022 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import fs from 'fs-extra';
+import * as yaml from 'js-yaml';
+import path from 'node:path';
+import { ParsedLocationAnnotation } from '../../helpers';
+import {
+  ALLOWED_MKDOCS_KEYS,
+  ALLOWED_THEME_KEYS,
+  DANGEROUS_EXTENSION_CONFIG_KEYS,
+  getRepoUrlFromLocationAnnotation,
+  MKDOCS_SCHEMA,
+  UnknownTag,
+} from './helpers';
+import { toError } from '@backstage/errors';
+import { ScmIntegrationRegistry } from '@backstage/integration';
+import {
+  LoggerService,
+  resolveSafeChildPath,
+} from '@backstage/backend-plugin-api';
+
+const MATERIAL_THEME = 'material';
+const PYMDOWNX_SNIPPETS_EXTENSION = 'pymdownx.snippets';
+const PYMDOWNX_EXTENSION_PREFIX = 'pymdownx.';
+const MARKDOWN_EXTENSIONS_PREFIX = 'markdown.extensions.';
+
+const DEFAULT_ALLOWED_MKDOCS_PLUGINS = new Set([
+  'techdocs-core',
+  'search',
+  'material/search',
+  'redirects',
+  'group',
+  'material/group',
+]);
+const MKDOCS_PLUGIN_GROUPS = new Set(['group', 'material/group']);
+
+// Plain extension names must be checked against an allowlist rather than
+// passed through: extensions that ship in build images can execute code or
+// load files from the documentation input directory during generation.
+const DEFAULT_ALLOWED_EXTENSIONS = new Set([
+  // Built-in Python-Markdown extensions, bundled with the `markdown` package
+  // that both official TechDocs build images ship.
+  'abbr',
+  'admonition',
+  'attr_list',
+  'codehilite',
+  'def_list',
+  'extra',
+  'fenced_code',
+  'footnotes',
+  'legacy_attrs',
+  'legacy_em',
+  'md_in_html',
+  'meta',
+  'nl2br',
+  'sane_lists',
+  'smarty',
+  'tables',
+  'toc',
+  'wikilinks',
+  // Rendering extensions shipped in the official TechDocs build images.
+  'markdown_inline_graphviz',
+  'mdx_truly_sane_lists',
+  'plantuml_markdown',
+  'plantuml-markdown',
+  // Zensical's rendering extensions. Extensions that load code or files
+  // during generation are deliberately not allowed by default.
+  'zensical.extensions.autorefs',
+  'zensical.extensions.context',
+  'zensical.extensions.emoji',
+  'zensical.extensions.glightbox',
+  'zensical.extensions.links',
+]);
+
+function isPymdownxSnippetsExtension(extensionName: string): boolean {
+  return (
+    extensionName === PYMDOWNX_SNIPPETS_EXTENSION ||
+    extensionName === `${PYMDOWNX_SNIPPETS_EXTENSION}:SnippetExtension`
+  );
+}
+
+function isAllowedExtensionName(
+  extensionName: string,
+  allowedExtensions: Set<string>,
+): boolean {
+  // Python-Markdown accepts the full module path for built-in extensions,
+  // e.g. markdown.extensions.toc is the same extension as toc.
+  const shortName = extensionName.startsWith(MARKDOWN_EXTENSIONS_PREFIX)
+    ? extensionName.slice(MARKDOWN_EXTENSIONS_PREFIX.length)
+    : extensionName;
+  // The pymdownx.* family consists of long-established rendering extensions;
+  // the file-including pymdownx.snippets extension is special-cased above.
+  return (
+    allowedExtensions.has(shortName) ||
+    shortName.startsWith(PYMDOWNX_EXTENSION_PREFIX)
+  );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value) ||
+    value instanceof UnknownTag
+  ) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeMkdocsPlugins(plugins: unknown): unknown[] | undefined {
+  if (Array.isArray(plugins)) {
+    return plugins;
+  }
+  if (isPlainObject(plugins)) {
+    return Object.entries(plugins).map(([name, config]) => ({
+      [name]: config,
+    }));
+  }
+  return undefined;
+}
+
+function sanitizeMkdocsPlugins(
+  plugins: unknown,
+  allowedPlugins: Set<string>,
+  removedPlugins: Set<string>,
+): unknown[] {
+  if (plugins instanceof UnknownTag) {
+    removedPlugins.add('dynamically configured plugin name');
+    return [];
+  }
+
+  const normalizedPlugins = normalizeMkdocsPlugins(plugins);
+  if (!normalizedPlugins) {
+    removedPlugins.add('malformed plugin declaration');
+    return [];
+  }
+
+  const sanitizedPlugins: unknown[] = [];
+  for (const plugin of normalizedPlugins) {
+    if (plugin instanceof UnknownTag) {
+      removedPlugins.add('dynamically configured plugin name');
+      continue;
+    }
+
+    let pluginName: string;
+    if (typeof plugin === 'string' && plugin.length > 0) {
+      pluginName = plugin;
+    } else if (isPlainObject(plugin) && Object.keys(plugin).length === 1) {
+      [pluginName] = Object.keys(plugin);
+      const config = plugin[pluginName];
+      if (config !== null && !isPlainObject(config)) {
+        removedPlugins.add('malformed plugin declaration');
+        continue;
+      }
+    } else {
+      removedPlugins.add('malformed plugin declaration');
+      continue;
+    }
+
+    if (!allowedPlugins.has(pluginName)) {
+      removedPlugins.add(pluginName);
+      continue;
+    }
+
+    let sanitizedPlugin = plugin;
+    if (isPlainObject(plugin)) {
+      const config = plugin[pluginName];
+      if (MKDOCS_PLUGIN_GROUPS.has(pluginName) && isPlainObject(config)) {
+        sanitizedPlugin = {
+          ...plugin,
+          [pluginName]: {
+            ...config,
+            plugins: sanitizeMkdocsPlugins(
+              config.plugins,
+              allowedPlugins,
+              removedPlugins,
+            ),
+          },
+        };
+      }
+    }
+
+    sanitizedPlugins.push(sanitizedPlugin);
+  }
+
+  return sanitizedPlugins;
+}
+
+// mkdocs-material globs SVGs from every `options.custom_icons` path with no
+// confinement, so the option must be an array of string paths that each
+// resolve inside the documentation input directory, which mkdocs runs from.
+function isConfinedCustomIcons(
+  customIcons: unknown,
+  inputDir: string,
+): boolean {
+  if (!Array.isArray(customIcons)) {
+    return false;
+  }
+
+  return customIcons.every(entry => {
+    if (typeof entry !== 'string') {
+      return false;
+    }
+    try {
+      resolveSafeChildPath(inputDir, entry);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+type MkDocsThemeObject = {
+  name?: string;
+  font?: boolean;
+};
+
+function isThemeObject(theme: unknown): theme is MkDocsThemeObject {
+  return typeof theme === 'object' && theme !== null && !Array.isArray(theme);
+}
+
+type MkDocsObject = {
+  plugins?: string[];
+  docs_dir: string;
+  repo_url?: string;
+  edit_uri?: string;
+  theme?: MkDocsThemeObject;
+};
+
+const patchMkdocsFile = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+  updateAction: (mkdocsYml: MkDocsObject) => boolean,
+  options?: { failOnError?: boolean },
+) => {
+  // We only want to override the mkdocs.yml if it has actually changed. This is relevant if
+  // used with a 'dir' location on the file system as this would permanently update the file.
+  let didEdit = false;
+
+  let mkdocsYmlFileString;
+  try {
+    mkdocsYmlFileString = await fs.readFile(mkdocsYmlPath, 'utf8');
+  } catch (error) {
+    logger.warn(
+      `Could not read MkDocs YAML config file ${mkdocsYmlPath} before running the generator: ${
+        toError(error).message
+      }`,
+    );
+    if (options?.failOnError) {
+      throw error;
+    }
+    return;
+  }
+
+  let mkdocsYml: any;
+  try {
+    mkdocsYml = yaml.load(mkdocsYmlFileString, { schema: MKDOCS_SCHEMA });
+
+    // mkdocsYml should be an object type after successful parsing.
+    // But based on its type definition, it can also be a string or undefined, which we don't want.
+    if (typeof mkdocsYml === 'string' || typeof mkdocsYml === 'undefined') {
+      throw new Error('Bad YAML format.');
+    }
+  } catch (error) {
+    logger.warn(
+      `Error in parsing YAML at ${mkdocsYmlPath} before running the generator. ${
+        toError(error).message
+      }`,
+    );
+    if (options?.failOnError) {
+      throw error;
+    }
+    return;
+  }
+
+  didEdit = updateAction(mkdocsYml);
+
+  try {
+    if (didEdit) {
+      await fs.writeFile(
+        mkdocsYmlPath,
+        yaml.dump(mkdocsYml, { schema: MKDOCS_SCHEMA }),
+        'utf8',
+      );
+    }
+  } catch (error) {
+    logger.warn(
+      `Could not write to ${mkdocsYmlPath} after updating it before running the generator. ${
+        toError(error).message
+      }`,
+    );
+    if (options?.failOnError) {
+      throw error;
+    }
+    return;
+  }
+};
+
+const patchMkdocsFileOrThrow = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+  updateAction: (mkdocsYml: MkDocsObject) => boolean,
+) =>
+  patchMkdocsFile(mkdocsYmlPath, logger, updateAction, {
+    failOnError: true,
+  });
+
+/**
+ * Update the mkdocs.yml file before TechDocs generator uses it to generate docs site.
+ *
+ * List of tasks:
+ * - Add repo_url or edit_uri if it does not exists
+ * If mkdocs.yml has a repo_url, the generated docs site gets an Edit button on the pages by default.
+ * If repo_url is missing in mkdocs.yml, we will use techdocs annotation of the entity to possibly get
+ * the repository URL.
+ *
+ * This function will not throw an error since this is not critical to the whole TechDocs pipeline.
+ * Instead it will log warnings if there are any errors in reading, parsing or writing YAML.
+ *
+ * @param mkdocsYmlPath - Absolute path to mkdocs.yml or equivalent of a docs site
+ * @param logger - A logger instance
+ * @param parsedLocationAnnotation - Object with location url and type
+ * @param scmIntegrations - the scmIntegration to do url transformations
+ */
+export const patchMkdocsYmlPreBuild = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+  parsedLocationAnnotation: ParsedLocationAnnotation,
+  scmIntegrations: ScmIntegrationRegistry,
+) => {
+  await patchMkdocsFile(mkdocsYmlPath, logger, mkdocsYml => {
+    if (!('repo_url' in mkdocsYml) || !('edit_uri' in mkdocsYml)) {
+      // Add edit_uri and/or repo_url to mkdocs.yml if it is missing.
+      // This will enable the Page edit button generated by MkDocs.
+      // If the either has been set, keep the original value
+      const result = getRepoUrlFromLocationAnnotation(
+        parsedLocationAnnotation,
+        scmIntegrations,
+        mkdocsYml.docs_dir,
+      );
+
+      if (result.repo_url || result.edit_uri) {
+        mkdocsYml.repo_url = mkdocsYml.repo_url || result.repo_url;
+        mkdocsYml.edit_uri = mkdocsYml.edit_uri || result.edit_uri;
+
+        logger.info(
+          `Set ${JSON.stringify(
+            result,
+          )}. You can disable this feature by manually setting 'repo_url' or 'edit_uri' according to the MkDocs documentation at https://www.mkdocs.org/user-guide/configuration/#repo_url`,
+        );
+        return true;
+      }
+    }
+    return false;
+  });
+};
+
+/**
+ * Update the mkdocs.yml file before TechDocs generator uses it to generate docs site.
+ *
+ * List of tasks:
+ * - Add all provided default plugins
+ *
+ * This function will not throw an error since this is not critical to the whole TechDocs pipeline.
+ * Instead it will log warnings if there are any errors in reading, parsing or writing YAML.
+ *
+ * @param mkdocsYmlPath - Absolute path to mkdocs.yml or equivalent of a docs site
+ * @param logger - A logger instance
+ * @param defaultPlugins - List of default mkdocs plugins
+ */
+export const patchMkdocsYmlWithPlugins = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+  defaultPlugins: string[] = ['techdocs-core'],
+) => {
+  await patchMkdocsFile(mkdocsYmlPath, logger, mkdocsYml => {
+    // Modify mkdocs.yaml to contain the required default plugins.
+    // If no plugins are defined we can just return the defaults.
+    if (!('plugins' in mkdocsYml)) {
+      mkdocsYml.plugins = defaultPlugins;
+      return true;
+    }
+
+    // Otherwise, check each default plugin and include it if necessary.
+    let changesMade = false;
+
+    defaultPlugins.forEach(dp => {
+      // if the plugin isn't there as a string, and isn't there as an object (which may itself contain extra config)
+      // then we need to add it
+      if (
+        !(
+          mkdocsYml.plugins!.includes(dp) ||
+          mkdocsYml.plugins!.some(p => p.hasOwnProperty(dp))
+        )
+      ) {
+        mkdocsYml.plugins = [...new Set([...mkdocsYml.plugins!, dp])];
+        changesMade = true;
+      }
+    });
+
+    return changesMade;
+  });
+};
+
+/**
+ * Disable external font download for the material theme.
+ * @param mkdocsYmlPath - Absolute path to mkdocs.yml or equivalent of a docs site
+ * @param logger
+ */
+export const patchMkdocsYmlWithFontDisabled = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+) => {
+  await patchMkdocsFile(mkdocsYmlPath, logger, mkdocsYml => {
+    if (!('theme' in mkdocsYml)) {
+      // No theme section exists, create it with font disabled
+      mkdocsYml.theme = {
+        name: MATERIAL_THEME,
+        font: false,
+      };
+      return true;
+    }
+
+    const theme = mkdocsYml.theme;
+    if (isThemeObject(theme)) {
+      // Theme section exists. Only modify it when the configured theme is Material
+      if (theme.name === MATERIAL_THEME && !('font' in theme)) {
+        theme.font = false;
+        return true;
+      }
+      if (theme.name !== MATERIAL_THEME) {
+        logger.debug(
+          'mkdocs.yml theme is not "material"; skipping font disabling patch',
+        );
+      }
+    }
+
+    return false;
+  });
+};
+
+/**
+ * Sanitize mkdocs.yml by keeping only allowed configuration keys.
+ *
+ * TechDocs only supports a subset of MkDocs configuration options.
+ * This function reconstructs the config with only allowed keys,
+ * discarding everything else. This approach ensures that any unknown
+ * or potentially dangerous configuration options are not passed to MkDocs.
+ *
+ * The file is always rewritten to ensure YAML features like merge keys
+ * and anchors are resolved into plain configuration.
+ *
+ * @param mkdocsYmlPath - Absolute path to mkdocs.yml or equivalent of a docs site
+ * @param logger - A logger instance
+ * @param additionalAllowedKeys - Optional array of additional keys to allow beyond the default allowlist
+ * @param additionalAllowedPlugins - Optional array of additional plugins to allow beyond the default set
+ * @param additionalAllowedExtensions - Optional array of additional markdown extensions to allow beyond the default set
+ * @alpha
+ */
+export const sanitizeMkdocsYml = async (
+  mkdocsYmlPath: string,
+  logger: LoggerService,
+  additionalAllowedKeys?: string[],
+  additionalAllowedPlugins?: string[],
+  additionalAllowedExtensions?: string[],
+) => {
+  await patchMkdocsFileOrThrow(mkdocsYmlPath, logger, mkdocsYml => {
+    // Combine default allowed keys with additional keys
+    const allowedKeys = new Set(ALLOWED_MKDOCS_KEYS);
+    if (additionalAllowedKeys && additionalAllowedKeys.length > 0) {
+      logger.warn(
+        `DANGEROUS: Allowing additional MkDocs configuration keys beyond the default safe allowlist: ${additionalAllowedKeys.join(
+          ', ',
+        )}. This may introduce security vulnerabilities. Only use in trusted environments.`,
+      );
+      additionalAllowedKeys.forEach(key => allowedKeys.add(key));
+    }
+
+    const allowedExtensions = new Set(DEFAULT_ALLOWED_EXTENSIONS);
+    if (additionalAllowedExtensions && additionalAllowedExtensions.length > 0) {
+      logger.warn(
+        `DANGEROUS: Allowing additional MkDocs markdown extensions beyond the default safe allowlist: ${additionalAllowedExtensions.join(
+          ', ',
+        )}. Some markdown extensions execute code or load files from the documentation input directory. Only use in trusted environments.`,
+      );
+      additionalAllowedExtensions.forEach(extension =>
+        allowedExtensions.add(extension),
+      );
+    }
+
+    // Identify keys that will be removed for logging
+    const removedKeys = Object.keys(mkdocsYml).filter(
+      key => !allowedKeys.has(key),
+    );
+
+    if (removedKeys.length > 0) {
+      logger.warn(
+        `Removed the following unsupported configuration keys from mkdocs.yml: ${removedKeys.join(
+          ', ',
+        )}. ` +
+          `TechDocs only supports a subset of MkDocs configuration options.`,
+      );
+    }
+
+    // Build a new object with only allowed keys
+    const sanitized: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      if (key in mkdocsYml) {
+        sanitized[key] = (mkdocsYml as Record<string, unknown>)[key];
+      }
+    }
+
+    // Sanitize markdown_extensions
+    const extensions = sanitized.markdown_extensions;
+    const removedEntries: string[] = [];
+    const inputDir = path.dirname(mkdocsYmlPath);
+    let removedCustomIcons = false;
+    const extensionMapping = isPlainObject(extensions) ? extensions : undefined;
+    let normalizedExtensions: unknown[] | undefined;
+    if (Array.isArray(extensions)) {
+      normalizedExtensions = extensions;
+    } else if (extensionMapping) {
+      normalizedExtensions = Object.entries(extensionMapping).map(
+        ([name, config]) => ({
+          [name]: config,
+        }),
+      );
+    }
+    if (extensions instanceof UnknownTag) {
+      removedEntries.push('dynamically configured extension');
+      sanitized.markdown_extensions = [];
+    } else if (normalizedExtensions) {
+      const sanitizedExtensions = normalizedExtensions.flatMap<unknown>(ext => {
+        if (ext instanceof UnknownTag) {
+          removedEntries.push('dynamically configured extension');
+          return [];
+        }
+
+        if (typeof ext === 'string') {
+          if (isPymdownxSnippetsExtension(ext)) {
+            return [ext];
+          }
+
+          if (ext.includes(':')) {
+            removedEntries.push(ext);
+            return [];
+          }
+
+          if (!isAllowedExtensionName(ext, allowedExtensions)) {
+            removedEntries.push(ext);
+            return [];
+          }
+          return [ext];
+        }
+
+        if (!isPlainObject(ext)) {
+          removedEntries.push('malformed extension declaration');
+          return [];
+        }
+
+        // Check every key, not just the first, so that a multi-key mapping
+        // cannot smuggle a dangerous name past the filter.
+        const extensionEntries = Object.entries(ext);
+        const dangerousNames = extensionEntries
+          .map(([extensionName]) => extensionName)
+          .filter(
+            extensionName =>
+              extensionName.includes(':') &&
+              !isPymdownxSnippetsExtension(extensionName),
+          );
+        if (dangerousNames.length > 0) {
+          removedEntries.push(...dangerousNames);
+          return [];
+        }
+
+        const sanitizedExtension: Record<string, unknown> = {};
+        for (const [extensionName, extensionConfig] of extensionEntries) {
+          if (!isAllowedExtensionName(extensionName, allowedExtensions)) {
+            removedEntries.push(extensionName);
+            continue;
+          }
+
+          if (extensionConfig instanceof UnknownTag) {
+            removedEntries.push(
+              `dynamically configured ${extensionName} extension`,
+            );
+            continue;
+          }
+
+          if (isPymdownxSnippetsExtension(extensionName)) {
+            if (
+              extensionConfig !== null &&
+              (typeof extensionConfig !== 'object' ||
+                Object.keys(extensionConfig).length > 0)
+            ) {
+              removedEntries.push(`${extensionName} configuration`);
+            }
+            sanitizedExtension[extensionName] = {};
+          } else if (isPlainObject(extensionConfig)) {
+            const sanitizedConfig = { ...extensionConfig };
+            for (const dangerousKey of DANGEROUS_EXTENSION_CONFIG_KEYS) {
+              if (dangerousKey in sanitizedConfig) {
+                delete sanitizedConfig[dangerousKey];
+                removedEntries.push(dangerousKey);
+              }
+            }
+
+            const options = sanitizedConfig.options;
+            // A tagged value such as `!ENV` resolves to a mapping at build
+            // time, so its custom_icons cannot be checked here.
+            if (options instanceof UnknownTag) {
+              delete sanitizedConfig.options;
+              removedCustomIcons = true;
+            } else if (isPlainObject(options) && 'custom_icons' in options) {
+              if (!isConfinedCustomIcons(options.custom_icons, inputDir)) {
+                const sanitizedOptions = { ...options };
+                delete sanitizedOptions.custom_icons;
+                sanitizedConfig.options = sanitizedOptions;
+                removedCustomIcons = true;
+              }
+            }
+            sanitizedExtension[extensionName] = sanitizedConfig;
+          } else {
+            sanitizedExtension[extensionName] = extensionConfig;
+          }
+        }
+
+        return Object.keys(sanitizedExtension).length > 0
+          ? [sanitizedExtension]
+          : [];
+      });
+
+      sanitized.markdown_extensions = extensionMapping
+        ? Object.assign({}, ...sanitizedExtensions)
+        : sanitizedExtensions;
+    } else if (extensions !== undefined) {
+      removedEntries.push('malformed extension declaration');
+      sanitized.markdown_extensions = [];
+    }
+
+    if (removedEntries.length > 0) {
+      logger.warn(
+        `Removed the following dangerous or unsupported entries from markdown_extensions in mkdocs.yml: ${removedEntries.join(
+          ', ',
+        )}. To allow additional markdown extensions, configure 'techdocs.generator.mkdocs.dangerouslyAllowAdditionalExtensions' in your Backstage app-config. When using the TechDocs CLI, use '--dangerouslyAllowAdditionalExtensions' instead.`,
+      );
+    }
+
+    if (removedCustomIcons) {
+      logger.warn(
+        `Removed the custom_icons option from markdown_extensions in mkdocs.yml because it must be an array of string paths inside the documentation input directory.`,
+      );
+    }
+
+    if ('plugins' in sanitized) {
+      const allowedPlugins = new Set(DEFAULT_ALLOWED_MKDOCS_PLUGINS);
+      additionalAllowedPlugins?.forEach(plugin => allowedPlugins.add(plugin));
+
+      const removedPlugins = new Set<string>();
+      sanitized.plugins = sanitizeMkdocsPlugins(
+        sanitized.plugins,
+        allowedPlugins,
+        removedPlugins,
+      );
+
+      if (removedPlugins.size > 0) {
+        logger.warn(
+          `Removed unsupported MkDocs plugins from mkdocs.yml: ${Array.from(
+            removedPlugins,
+          ).join(
+            ', ',
+          )}. To allow additional plugins, configure 'techdocs.generator.mkdocs.dangerouslyAllowAdditionalPlugins' in your Backstage app-config. When using the TechDocs CLI, use '--defaultPlugin' instead.`,
+        );
+      }
+    }
+
+    // Clear the original object and copy sanitized values back
+    for (const key of Object.keys(mkdocsYml)) {
+      delete (mkdocsYml as Record<string, unknown>)[key];
+    }
+    Object.assign(mkdocsYml, sanitized);
+
+    // Sanitize theme sub-keys
+    const theme = (mkdocsYml as Record<string, unknown>).theme;
+    if (isThemeObject(theme)) {
+      const removedThemeKeys = Object.keys(theme).filter(
+        key => !ALLOWED_THEME_KEYS.has(key),
+      );
+      if (removedThemeKeys.length > 0) {
+        for (const key of removedThemeKeys) {
+          delete (theme as Record<string, unknown>)[key];
+        }
+        logger.warn(
+          `Removed the following unsupported keys from theme configuration in mkdocs.yml: ${removedThemeKeys.join(
+            ', ',
+          )}.`,
+        );
+      }
+    }
+
+    // Always rewrite to ensure clean YAML output (resolves merge keys, anchors, etc.)
+    return true;
+  });
+};

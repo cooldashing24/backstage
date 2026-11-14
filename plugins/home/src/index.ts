@@ -24,9 +24,22 @@ export {
   homePlugin,
   HomepageCompositionRoot,
   HomePageRandomJoke,
+  HomePageToolkit,
+  HomePageCompanyLogo,
+  HomePageStarredEntities,
   ComponentAccordion,
   ComponentTabs,
   ComponentTab,
+  WelcomeTitle,
+  HeaderWorldClock,
+  HomePageTopVisited,
+  HomePageRecentlyVisited,
+  FeaturedDocsCard,
+  QuickStartCard,
 } from './plugin';
-export { SettingsModal } from './components';
-export { createCardExtension } from './extensions';
+export * from './components';
+export * from './assets';
+export * from './homePageComponents';
+export * from './deprecated';
+export * from './api';
+export { homeTranslationRef } from './translation';

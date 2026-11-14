@@ -16,16 +16,19 @@
 
 import { AnalyticsApi, AnalyticsEvent } from '@backstage/core-plugin-api';
 
+/**
+ * Mock implementation of {@link core-plugin-api#AnalyticsApi} with helpers to ensure that events are sent correctly.
+ * Use getEvents in tests to verify captured events.
+ *
+ * @public
+ * @deprecated Use {@link @backstage/test-utils#mockApis.(analytics:namespace)} instead
+ */
 export class MockAnalyticsApi implements AnalyticsApi {
   private events: AnalyticsEvent[] = [];
 
-  captureEvent({
-    action,
-    subject,
-    value,
-    attributes,
-    context,
-  }: AnalyticsEvent) {
+  captureEvent(event: AnalyticsEvent) {
+    const { action, subject, value, attributes, context } = event;
+
     this.events.push({
       action,
       subject,

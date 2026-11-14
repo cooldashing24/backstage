@@ -1,0 +1,426 @@
+/*
+ * Copyright 2023 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { TestDatabases } from '@backstage/backend-test-utils';
+import { Knex } from 'knex';
+import { applyDatabaseMigrations } from '../../migrations';
+import {
+  DbFinalEntitiesRow,
+  DbRefreshStateReferencesRow,
+  DbRefreshStateRow,
+  DbRelationsRow,
+} from '../../tables';
+import { markForStitching } from '../stitcher/markForStitching';
+import { deleteOrphanedEntities } from './deleteOrphanedEntities';
+
+jest.mock('../stitcher/markForStitching', () => {
+  const actual = jest.requireActual('../stitcher/markForStitching');
+  return {
+    ...actual,
+    markForStitching: jest.fn(actual.markForStitching),
+  };
+});
+
+jest.setTimeout(60_000);
+
+const databases = TestDatabases.create();
+
+describe.each(databases.eachSupportedId())(
+  'deleteOrphanedEntities, %p',
+  databaseId => {
+    async function createDatabase() {
+      const knex = await databases.init(databaseId);
+      await applyDatabaseMigrations(knex);
+      return knex;
+    }
+
+    async function run(knex: Knex): Promise<number> {
+      let result: number;
+      await knex.transaction(
+        async tx => {
+          // We can't return here, as knex swallows the return type in case the
+          // transaction is rolled back:
+          // https://github.com/knex/knex/blob/e37aeaa31c8ef9c1b07d2e4d3ec6607e557d800d/lib/transaction.js#L136
+          result = await deleteOrphanedEntities({ knex: tx });
+        },
+        {
+          // If we explicitly trigger a rollback, don't fail.
+          doNotRejectOnRollback: true,
+        },
+      );
+      return result!;
+    }
+
+    async function insertEntity(knex: Knex, ...entityRefs: string[]) {
+      for (const ref of entityRefs) {
+        await knex<DbRefreshStateRow>('refresh_state').insert({
+          entity_id: `id-${ref}`,
+          entity_ref: ref,
+          unprocessed_entity: '{}',
+          processed_entity: '{}',
+          errors: '[]',
+          next_update_at: '2021-04-01 13:37:00',
+          last_discovery_at: '2021-04-01 13:37:00',
+          result_hash: 'original',
+        });
+        await knex<DbFinalEntitiesRow>('final_entities').insert({
+          entity_id: `id-${ref}`,
+          hash: 'original',
+          entity_ref: ref,
+        });
+      }
+    }
+
+    async function insertReference(
+      knex: Knex,
+      ...refs: DbRefreshStateReferencesRow[]
+    ) {
+      await knex<DbRefreshStateReferencesRow>(
+        'refresh_state_references',
+      ).insert(refs);
+    }
+
+    async function insertRelation(knex: Knex, fromRef: string, toRef: string) {
+      const orig = await knex
+        .select('entity_id')
+        .from('refresh_state')
+        .where('entity_ref', fromRef);
+      await knex<DbRelationsRow>('relations').insert({
+        originating_entity_id: orig[0].entity_id,
+        type: 'fake',
+        source_entity_ref: fromRef,
+        target_entity_ref: toRef,
+      });
+    }
+
+    async function refreshState(knex: Knex) {
+      return await knex<DbRefreshStateRow>('refresh_state')
+        .orderBy('entity_ref')
+        .select('entity_ref', 'result_hash');
+    }
+
+    async function stitchQueue(knex: Knex) {
+      return await knex('stitch_queue')
+        .orderBy('entity_ref')
+        .select('entity_ref');
+    }
+
+    async function finalEntities(knex: Knex) {
+      return await knex<DbFinalEntitiesRow>('final_entities')
+        .join(
+          'refresh_state',
+          'final_entities.entity_id',
+          'refresh_state.entity_id',
+        )
+        .leftOuterJoin(
+          'stitch_queue',
+          'stitch_queue.entity_ref',
+          'refresh_state.entity_ref',
+        )
+        .orderBy('refresh_state.entity_ref')
+        .select({
+          entity_ref: 'refresh_state.entity_ref',
+          hash: 'final_entities.hash',
+          next_stitch_at: 'stitch_queue.next_stitch_at',
+        });
+    }
+
+    it('discovers orphan candidates with a narrow CTE', async () => {
+      const knex = await createDatabase();
+      await insertEntity(knex, 'E1');
+      await insertReference(knex, {
+        source_key: 'P1',
+        target_entity_ref: 'E1',
+      });
+
+      const queries: string[] = [];
+      const onQuery = (query: { sql: string }) => queries.push(query.sql);
+      knex.on('query', onQuery);
+      try {
+        await expect(run(knex)).resolves.toEqual(0);
+      } finally {
+        knex.off('query', onQuery);
+      }
+
+      const candidateQueries = queries.filter(query =>
+        query.includes('orphan_refs'),
+      );
+      expect(candidateQueries).toHaveLength(1);
+
+      const expectedCte = knex.client.config.client.includes('pg')
+        ? 'with "orphan_refs"("entity_ref") as materialized ' +
+          '(select "refresh_state"."entity_ref" from "refresh_state"'
+        : 'with `orphan_refs`(`entity_ref`) as ' +
+          '(select `refresh_state`.`entity_ref` from `refresh_state`';
+      expect(candidateQueries[0]).toContain(expectedCte);
+    });
+
+    it('rechecks orphan status in the deletion statement', async () => {
+      const knex = await createDatabase();
+      await insertEntity(knex, 'E1');
+
+      const queries: string[] = [];
+      const onQuery = (query: { sql: string }) => queries.push(query.sql);
+      knex.on('query', onQuery);
+      try {
+        await expect(run(knex)).resolves.toEqual(1);
+      } finally {
+        knex.off('query', onQuery);
+      }
+
+      const deletionQuery = queries.find(
+        query => query.startsWith('delete from') && query.includes('entity_id'),
+      );
+      expect(deletionQuery).toMatch(/not exists/);
+      expect(deletionQuery).toMatch(
+        /target_entity_ref.*refresh_state.*entity_ref/,
+      );
+    });
+
+    if (databaseId.startsWith('POSTGRES_')) {
+      it('preserves an entity when a reference is committed during cleanup', async () => {
+        const knex = await createDatabase();
+        await insertEntity(knex, 'E1');
+
+        const referenceTx = await knex.transaction();
+        const cleanupTx = await knex.transaction();
+
+        try {
+          await insertReference(referenceTx, {
+            source_key: 'P1',
+            target_entity_ref: 'E1',
+          });
+
+          const {
+            rows: [{ pid: referencePid }],
+          } = await referenceTx.raw<{ rows: [{ pid: number }] }>(
+            'SELECT pg_backend_pid() AS pid',
+          );
+          const {
+            rows: [{ pid: cleanupPid }],
+          } = await cleanupTx.raw<{ rows: [{ pid: number }] }>(
+            'SELECT pg_backend_pid() AS pid',
+          );
+
+          const cleanup = deleteOrphanedEntities({ knex: cleanupTx });
+
+          let isBlockedByReference = false;
+          for (let attempt = 0; attempt < 500; ++attempt) {
+            const { rows } = await knex.raw<{
+              rows: Array<{ is_blocked: boolean }>;
+            }>('SELECT ?::integer = ANY(pg_blocking_pids(?)) AS is_blocked', [
+              referencePid,
+              cleanupPid,
+            ]);
+            if (rows[0]?.is_blocked) {
+              isBlockedByReference = true;
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          expect(isBlockedByReference).toBe(true);
+
+          await referenceTx.commit();
+          await expect(cleanup).resolves.toBe(0);
+          await cleanupTx.commit();
+
+          await expect(refreshState(knex)).resolves.toEqual([
+            { entity_ref: 'E1', result_hash: 'original' },
+          ]);
+          await expect(
+            knex<DbRefreshStateReferencesRow>(
+              'refresh_state_references',
+            ).select('source_key', 'target_entity_ref'),
+          ).resolves.toEqual([{ source_key: 'P1', target_entity_ref: 'E1' }]);
+        } finally {
+          if (!referenceTx.isCompleted()) {
+            await referenceTx.rollback();
+          }
+          if (!cleanupTx.isCompleted()) {
+            await cleanupTx.rollback();
+          }
+        }
+      });
+    }
+
+    if (databaseId === 'SQLITE_3') {
+      const ignoreEntityDeletion = async (knex: Knex, entityRef: string) => {
+        await knex.raw(`
+          CREATE TRIGGER ignore_entity_deletion
+          BEFORE DELETE ON refresh_state
+          WHEN OLD.entity_ref = '${entityRef}'
+          BEGIN
+            SELECT RAISE(IGNORE);
+          END
+        `);
+      };
+
+      it('marks relation sources only for deleted candidates', async () => {
+        const knex = await createDatabase();
+        await insertEntity(knex, 'E1', 'E2', 'E3', 'E4');
+        await insertReference(
+          knex,
+          { source_key: 'P1', target_entity_ref: 'E3' },
+          { source_key: 'P2', target_entity_ref: 'E4' },
+        );
+        await insertRelation(knex, 'E3', 'E1');
+        await insertRelation(knex, 'E4', 'E2');
+
+        // Simulate E2 being spared by the deletion-time orphan recheck.
+        await ignoreEntityDeletion(knex, 'E2');
+
+        await expect(run(knex)).resolves.toEqual(1);
+        await expect(stitchQueue(knex)).resolves.toEqual([
+          { entity_ref: 'E3' },
+        ]);
+      });
+
+      it('stops when deletion makes no progress', async () => {
+        const knex = await createDatabase();
+        await insertEntity(knex, 'E1');
+
+        // Simulate a candidate being spared by the deletion-time orphan
+        // recheck. SQLite's RAISE(IGNORE) makes the DELETE affect zero rows
+        // while leaving the candidate visible to a subsequent iteration.
+        await ignoreEntityDeletion(knex, 'E1');
+
+        const queries: string[] = [];
+        const onQuery = (query: { sql: string }) => queries.push(query.sql);
+        knex.on('query', onQuery);
+        try {
+          await expect(run(knex)).resolves.toEqual(0);
+        } finally {
+          knex.off('query', onQuery);
+        }
+
+        expect(
+          queries.filter(query => query.includes('orphan_refs')),
+        ).toHaveLength(1);
+      });
+    }
+
+    it('rolls back deletion when affected entities cannot be marked', async () => {
+      const knex = await createDatabase();
+      await insertEntity(knex, 'E1', 'E2');
+      await insertReference(knex, {
+        source_key: 'P1',
+        target_entity_ref: 'E2',
+      });
+      await insertRelation(knex, 'E2', 'E1');
+
+      jest
+        .mocked(markForStitching)
+        .mockRejectedValueOnce(new Error('stitching failed'));
+      await expect(deleteOrphanedEntities({ knex })).rejects.toThrow(
+        'stitching failed',
+      );
+      await expect(refreshState(knex)).resolves.toEqual([
+        { entity_ref: 'E1', result_hash: 'original' },
+        { entity_ref: 'E2', result_hash: 'original' },
+      ]);
+    });
+
+    it.each(['root', 'transaction'])(
+      'works for some mixed paths with a %s Knex instance',
+      async mode => {
+        /*
+          In this graph, edges represent refresh state references, not entity relations:
+
+          P1 - E1 -- E2
+                    /
+                  E3
+                 /
+               E4
+                 \
+                  E5
+                 /
+               E6
+                 \
+                  E7
+                 /
+          P2 - E8
+
+          P3 - E9
+
+               E10
+
+          Result: E3, E4, E5, E6, and E10 deleted; others remain
+                  Entities that had relations pointing at orphans are marked for reprocessing
+       */
+        const knex = await createDatabase();
+        await insertEntity(
+          knex,
+          'E1',
+          'E2',
+          'E3',
+          'E4',
+          'E5',
+          'E6',
+          'E7',
+          'E8',
+          'E9',
+          'E10',
+        );
+        await insertReference(
+          knex,
+          { source_key: 'P1', target_entity_ref: 'E1' },
+          { source_entity_ref: 'E1', target_entity_ref: 'E2' },
+          { source_entity_ref: 'E3', target_entity_ref: 'E2' },
+          { source_entity_ref: 'E4', target_entity_ref: 'E3' },
+          { source_entity_ref: 'E4', target_entity_ref: 'E5' },
+          { source_entity_ref: 'E6', target_entity_ref: 'E5' },
+          { source_entity_ref: 'E6', target_entity_ref: 'E7' },
+          { source_key: 'P2', target_entity_ref: 'E8' },
+          { source_entity_ref: 'E8', target_entity_ref: 'E7' },
+          { source_key: 'P3', target_entity_ref: 'E9' },
+        );
+        await insertRelation(knex, 'E1', 'E2');
+        await insertRelation(knex, 'E2', 'E3');
+        await insertRelation(knex, 'E10', 'E6');
+        await insertRelation(knex, 'E7', 'E6');
+        await expect(
+          mode === 'root' ? deleteOrphanedEntities({ knex }) : run(knex),
+        ).resolves.toEqual(5);
+        await expect(refreshState(knex)).resolves.toEqual([
+          { entity_ref: 'E1', result_hash: 'original' },
+          { entity_ref: 'E2', result_hash: 'original' },
+          { entity_ref: 'E7', result_hash: 'original' },
+          { entity_ref: 'E8', result_hash: 'original' },
+          { entity_ref: 'E9', result_hash: 'original' },
+        ]);
+        await expect(stitchQueue(knex)).resolves.toEqual([
+          { entity_ref: 'E2' },
+          { entity_ref: 'E7' },
+        ]);
+        await expect(finalEntities(knex)).resolves.toEqual([
+          { entity_ref: 'E1', hash: 'original', next_stitch_at: null },
+          {
+            entity_ref: 'E2',
+            hash: 'original',
+            next_stitch_at: expect.anything(),
+          },
+          {
+            entity_ref: 'E7',
+            hash: 'original',
+            next_stitch_at: expect.anything(),
+          },
+          { entity_ref: 'E8', hash: 'original', next_stitch_at: null },
+          { entity_ref: 'E9', hash: 'original', next_stitch_at: null },
+        ]);
+      },
+    );
+  },
+);

@@ -1,11 +1,5 @@
-module.exports = {
-  extends: [require.resolve('@backstage/cli/config/eslint')],
-  overrides: [
-    {
-      files: ['**/*.ts?(x)'],
-      rules: {
-        'react/prop-types': 1,
-      },
+module.exports = require('@backstage/cli/config/eslint-factory')(__dirname, {
+    rules: {
+        '@backstage/no-top-level-material-ui-4-imports': 'error',
     },
-  ],
-};
+});

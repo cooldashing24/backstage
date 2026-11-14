@@ -13,32 +13,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 import { Entity } from '@backstage/catalog-model';
-import { ApiProvider, ApiRegistry } from '@backstage/core-app-api';
+import { ApiProvider } from '@backstage/core-app-api';
+import { analyticsApiRef } from '@backstage/core-plugin-api';
 import {
-  CatalogApi,
   catalogApiRef,
   EntityProvider,
+  entityRouteRef,
 } from '@backstage/plugin-catalog-react';
-import { renderInTestApp } from '@backstage/test-utils';
-import React from 'react';
-import { catalogEntityRouteRef, catalogGraphRouteRef } from '../../routes';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
+import {
+  mockApis,
+  renderInTestApp,
+  TestApiProvider,
+  TestApiRegistry,
+} from '@backstage/test-utils';
+import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { catalogGraphRouteRef } from '../../routes';
 import { CatalogGraphCard } from './CatalogGraphCard';
+import Button from '@material-ui/core/Button';
+import { translationApiRef } from '@backstage/core-plugin-api/alpha';
+import { catalogGraphApiRef, DefaultCatalogGraphApi } from '../../api';
+
+jest.setTimeout(30_000);
 
 describe('<CatalogGraphCard/>', () => {
   let entity: Entity;
   let wrapper: JSX.Element;
-  let catalog: jest.Mocked<CatalogApi>;
-  let apis: ApiRegistry;
-
-  beforeAll(() => {
-    Object.defineProperty(window.SVGElement.prototype, 'getBBox', {
-      value: () => ({ width: 100, height: 100 }),
-      configurable: true,
-    });
-  });
+  const catalog = catalogApiMock.mock();
+  let apis: TestApiRegistry;
 
   beforeEach(() => {
+    jest.clearAllMocks();
+
     entity = {
       apiVersion: 'a',
       kind: 'b',
@@ -47,18 +56,11 @@ describe('<CatalogGraphCard/>', () => {
         namespace: 'd',
       },
     };
-    catalog = {
-      getEntities: jest.fn(),
-      getEntityByName: jest.fn(async _ => ({ ...entity, relations: [] })),
-      removeEntityByUid: jest.fn(),
-      getLocationById: jest.fn(),
-      getOriginLocationByEntity: jest.fn(),
-      getLocationByEntity: jest.fn(),
-      addLocation: jest.fn(),
-      removeLocationById: jest.fn(),
-      refreshEntity: jest.fn(),
-    };
-    apis = ApiRegistry.with(catalogApiRef, catalog);
+    apis = TestApiRegistry.from(
+      [catalogApiRef, catalog],
+      [translationApiRef, mockApis.translation()],
+      [catalogGraphApiRef, new DefaultCatalogGraphApi()],
+    );
 
     wrapper = (
       <ApiProvider apis={apis}>
@@ -70,20 +72,45 @@ describe('<CatalogGraphCard/>', () => {
   });
 
   test('renders without exploding', async () => {
-    const { findByText, findAllByTestId } = await renderInTestApp(wrapper, {
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    await renderInTestApp(wrapper, {
       mountedRoutes: {
-        '/entity/{kind}/{namespace}/{name}': catalogEntityRouteRef,
+        '/entity/{kind}/{namespace}/{name}': entityRouteRef,
         '/catalog-graph': catalogGraphRouteRef,
       },
     });
 
-    expect(await findByText('b:d/c')).toBeInTheDocument();
-    expect(await findAllByTestId('node')).toHaveLength(1);
-    expect(catalog.getEntityByName).toBeCalledTimes(1);
+    expect(
+      await screen.findByText('b:d/c', {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findAllByTestId('node', {}, { timeout: 5_000 }),
+    ).toHaveLength(1);
+    expect(catalog.getEntitiesByRefs).toHaveBeenCalledTimes(1);
+    expect(catalog.getEntitiesByRefs).toHaveBeenCalledWith(
+      expect.objectContaining({ entityRefs: ['b:d/c'] }),
+    );
   });
 
   test('renders with custom title', async () => {
-    const { findByText } = await renderInTestApp(
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <EntityProvider entity={entity}>
           <CatalogGraphCard title="Custom Title" />
@@ -91,29 +118,146 @@ describe('<CatalogGraphCard/>', () => {
       </ApiProvider>,
       {
         mountedRoutes: {
-          '/entity/{kind}/{namespace}/{name}': catalogEntityRouteRef,
+          '/entity/{kind}/{namespace}/{name}': entityRouteRef,
           '/catalog-graph': catalogGraphRouteRef,
         },
       },
     );
 
-    expect(await findByText('Custom Title')).toBeInTheDocument();
+    expect(await screen.findByText('Custom Title')).toBeInTheDocument();
+  });
+
+  test('renders with action attribute', async () => {
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    await renderInTestApp(
+      <ApiProvider apis={apis}>
+        <EntityProvider entity={entity}>
+          <CatalogGraphCard action={<Button title="Action Button" />} />
+        </EntityProvider>
+      </ApiProvider>,
+      {
+        mountedRoutes: {
+          '/entity/{kind}/{namespace}/{name}': entityRouteRef,
+          '/catalog-graph': catalogGraphRouteRef,
+        },
+      },
+    );
+
+    expect(await screen.findByTitle('Action Button')).toBeInTheDocument();
   });
 
   test('renders link to standalone viewer', async () => {
-    const { findByText, getByText } = await renderInTestApp(wrapper, {
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    await renderInTestApp(wrapper, {
       mountedRoutes: {
-        '/entity/{kind}/{namespace}/{name}': catalogEntityRouteRef,
+        '/entity/{kind}/{namespace}/{name}': entityRouteRef,
         '/catalog-graph': catalogGraphRouteRef,
       },
     });
 
-    expect(await findByText('b:d/c')).toBeInTheDocument();
-    const button = getByText('View graph');
+    expect(
+      await screen.findByText('b:d/c', {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    const button = screen.getByText('View graph');
     expect(button).toBeInTheDocument();
     expect(button.closest('a')).toHaveAttribute(
       'href',
-      '/catalog-graph?rootEntityRefs%5B%5D=b%3Ad%2Fc',
+      '/catalog-graph?rootEntityRefs%5B%5D=b%3Ad%2Fc&maxDepth=1&unidirectional=true&mergeRelations=true&direction=LR',
+    );
+  });
+
+  test('renders link to standalone viewer with custom config', async () => {
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    await renderInTestApp(
+      <ApiProvider apis={apis}>
+        <EntityProvider entity={entity}>
+          <CatalogGraphCard maxDepth={2} mergeRelations={false} />
+        </EntityProvider>
+      </ApiProvider>,
+      {
+        mountedRoutes: {
+          '/entity/{kind}/{namespace}/{name}': entityRouteRef,
+          '/catalog-graph': catalogGraphRouteRef,
+        },
+      },
+    );
+
+    expect(
+      await screen.findByText('b:d/c', {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    const button = screen.getByText('View graph');
+    expect(button).toBeInTheDocument();
+    expect(button.closest('a')).toHaveAttribute(
+      'href',
+      '/catalog-graph?rootEntityRefs%5B%5D=b%3Ad%2Fc&maxDepth=2&unidirectional=true&mergeRelations=false&direction=LR',
+    );
+  });
+
+  test('captures analytics event on click', async () => {
+    catalog.getEntitiesByRefs.mockImplementation(async _ => ({
+      items: [
+        {
+          ...entity,
+          relations: [],
+        },
+      ],
+    }));
+
+    const analyticsApi = mockApis.analytics();
+    await renderInTestApp(
+      <TestApiProvider
+        apis={[
+          [analyticsApiRef, analyticsApi],
+          [translationApiRef, mockApis.translation()],
+        ]}
+      >
+        {wrapper}
+      </TestApiProvider>,
+      {
+        mountedRoutes: {
+          '/entity/{kind}/{namespace}/{name}': entityRouteRef,
+          '/catalog-graph': catalogGraphRouteRef,
+        },
+      },
+    );
+
+    expect(
+      await screen.findByText('b:d/c', {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByText('b:d/c'));
+
+    expect(analyticsApi.captureEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'click',
+        subject: 'd/c',
+        attributes: {
+          to: '/entity/{kind}/{namespace}/{name}',
+        },
+      }),
     );
   });
 });

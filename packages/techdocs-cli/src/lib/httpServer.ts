@@ -1,0 +1,147 @@
+/*
+ * Copyright 2020 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import serveHandler from 'serve-handler';
+import http from 'node:http';
+import httpProxy from 'http-proxy';
+import { createLogger } from './utility';
+import { proxyHtmlWithLivereloadInjection } from './livereload';
+import { EngineConfig } from './engines';
+
+export default class HTTPServer {
+  private readonly proxyEndpoint: string;
+  private readonly backstageBundleDir: string;
+  private readonly backstagePort: number;
+  private readonly docsTargetAddress: string;
+  private readonly verbose: boolean;
+  private readonly engineConfig: EngineConfig;
+
+  constructor(
+    backstageBundleDir: string,
+    backstagePort: number,
+    docsTargetAddress: string,
+    verbose: boolean,
+    engineConfig: EngineConfig,
+  ) {
+    this.proxyEndpoint = '/api/techdocs/';
+    this.backstageBundleDir = backstageBundleDir;
+    this.backstagePort = backstagePort;
+    this.docsTargetAddress = docsTargetAddress;
+    this.verbose = verbose;
+    this.engineConfig = engineConfig;
+  }
+
+  private createProxy() {
+    const proxy = httpProxy.createProxyServer({
+      target: this.docsTargetAddress,
+    });
+
+    return (request: http.IncomingMessage): [httpProxy, string] => {
+      // If the request path is prefixed with this.proxyEndpoint, remove it.
+      const proxyEndpointPath = new RegExp(`^${this.proxyEndpoint}`, 'i');
+      const forwardPath = request.url?.replace(proxyEndpointPath, '') || '';
+
+      return [proxy, forwardPath];
+    };
+  }
+
+  public async serve(): Promise<http.Server> {
+    const logger = createLogger({ verbose: false });
+    return new Promise<http.Server>((resolve, reject) => {
+      const proxyHandler = this.createProxy();
+      const server = http.createServer(
+        (request: http.IncomingMessage, response: http.ServerResponse) => {
+          // This endpoint is used by the frontend to issue a cookie for the user.
+          // But the MkDocs server doesn't expose it as a the Backstage backend does.
+          // So we need to fake it here to prevent 404 errors.
+          if (request.url === '/api/techdocs/.backstage/auth/v1/cookie') {
+            const oneHourInMilliseconds = 60 * 60 * 1000;
+            const expiresAt = new Date(Date.now() + oneHourInMilliseconds);
+            const cookie = { expiresAt: expiresAt.toISOString() };
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify(cookie));
+            return;
+          }
+
+          if (request.url?.startsWith(this.proxyEndpoint)) {
+            if (request.url?.endsWith('.html')) {
+              proxyHtmlWithLivereloadInjection({
+                request,
+                response,
+                targetAddress: this.docsTargetAddress,
+                proxyEndpoint: this.proxyEndpoint,
+                transformHtml: html => this.engineConfig.transformHtml(html),
+                onError: (error: Error) => reject(error),
+              });
+              return;
+            }
+
+            const [proxy, forwardPath] = proxyHandler(request);
+
+            proxy.on('error', (error: Error) => {
+              reject(error);
+            });
+
+            response.setHeader('Access-Control-Allow-Origin', '*');
+            response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+
+            request.url = forwardPath;
+            proxy.web(request, response);
+            return;
+          }
+
+          if (request.url === '/.detect') {
+            response.setHeader('Content-Type', 'text/plain');
+            response.end('techdocs-cli-server');
+            return;
+          }
+
+          if (request.url?.startsWith('/.livereload')) {
+            this.engineConfig.handleReloadRequest(
+              request,
+              response,
+              this.docsTargetAddress,
+              // The server is already listening, so rejecting would be a
+              // no-op; log instead so engine connection problems are visible.
+              (error: Error) =>
+                logger.warn(`Live reload unavailable: ${error.message}`),
+            );
+            return;
+          }
+
+          serveHandler(request, response, {
+            public: this.backstageBundleDir,
+            trailingSlash: true,
+            rewrites: [{ source: '**', destination: 'index.html' }],
+          });
+        },
+      );
+
+      server.listen(this.backstagePort, () => {
+        if (this.verbose) {
+          logger.info(
+            `[techdocs-preview-bundle] Running local version of Backstage at http://localhost:${this.backstagePort}`,
+          );
+        }
+        resolve(server);
+      });
+
+      server.on('error', (error: Error) => {
+        reject(error);
+      });
+    });
+  }
+}

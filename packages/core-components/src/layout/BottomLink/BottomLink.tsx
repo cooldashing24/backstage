@@ -14,16 +14,22 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { Divider, Typography, makeStyles } from '@material-ui/core';
-import ArrowIcon from '@material-ui/icons/ArrowForward';
-import { BackstageTheme } from '@backstage/theme';
 import Box from '@material-ui/core/Box';
+import Divider from '@material-ui/core/Divider';
+import { makeStyles } from '@material-ui/core/styles';
+import Typography from '@material-ui/core/Typography';
+import ArrowIcon from '@material-ui/icons/ArrowForward';
+import { MouseEvent } from 'react';
 import { Link } from '../../components/Link';
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link BottomLink} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type BottomLinkClassKey = 'root' | 'boxTitle' | 'arrow';
 
-const useStyles = makeStyles<BackstageTheme>(
+const useStyles = makeStyles(
   theme => ({
     root: {
       maxWidth: 'fit-content',
@@ -40,18 +46,31 @@ const useStyles = makeStyles<BackstageTheme>(
   { name: 'BackstageBottomLink' },
 );
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link BottomLink} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type BottomLinkProps = {
   link: string;
   title: string;
-  onClick?: (event: React.MouseEvent<HTMLAnchorElement>) => void;
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
 };
 
+/**
+ * Footer with link used in  {@link InfoCard } and {@link TabbedCard}
+ *
+ * @public
+ *
+ * @deprecated Compose `CardFooter` and `Link` from `@backstage/ui` instead.
+ * Pass the destination as `href` and add any desired arrow icon and layout.
+ */
 export function BottomLink(props: BottomLinkProps) {
   const { link, title, onClick } = props;
   const classes = useStyles();
 
   return (
-    <div>
+    <Box>
       <Divider />
       <Link to={link} onClick={onClick} underline="none">
         <Box display="flex" alignItems="center" className={classes.root}>
@@ -63,6 +82,6 @@ export function BottomLink(props: BottomLinkProps) {
           <ArrowIcon className={classes.arrow} />
         </Box>
       </Link>
-    </div>
+    </Box>
   );
 }

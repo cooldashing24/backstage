@@ -20,14 +20,24 @@
  * @packageDocumentation
  */
 
-export { readEnvConfig, loadConfigSchema, mergeConfigSchemas } from './lib';
+export {
+  ConfigSchemaError,
+  loadConfigSchema,
+  mergeConfigSchemas,
+} from './schema';
 export type {
   ConfigSchema,
   ConfigSchemaProcessingOptions,
   ConfigVisibility,
-  EnvFunc,
   LoadConfigSchemaOptions,
   TransformFunc,
-} from './lib';
+} from './schema';
 export { loadConfig } from './loader';
-export type { LoadConfigOptions } from './loader';
+export type {
+  ConfigTarget,
+  LoadConfigOptions,
+  LoadConfigOptionsWatch,
+  LoadConfigOptionsRemote,
+  LoadConfigResult,
+} from './loader';
+export * from './sources';

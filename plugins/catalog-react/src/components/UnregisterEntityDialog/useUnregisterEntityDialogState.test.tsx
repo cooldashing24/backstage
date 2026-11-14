@@ -14,46 +14,23 @@
  * limitations under the License.
  */
 
-import {
-  Entity,
-  Location,
-  ORIGIN_LOCATION_ANNOTATION,
-} from '@backstage/catalog-model';
-import { CatalogApi } from '@backstage/catalog-client';
+import { Location } from '@backstage/catalog-client';
+import { Entity, ANNOTATION_ORIGIN_LOCATION } from '@backstage/catalog-model';
 import { catalogApiRef } from '../../api';
-import {
-  act,
-  renderHook,
-  RenderHookResult,
-} from '@testing-library/react-hooks';
-import React from 'react';
-import {
-  UseUnregisterEntityDialogState,
-  useUnregisterEntityDialogState,
-} from './useUnregisterEntityDialogState';
-import { ApiProvider, ApiRegistry } from '@backstage/core-app-api';
-
-function defer<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>(_resolve => {
-    resolve = _resolve;
-  });
-  return { promise, resolve };
-}
+import { renderHook, waitFor } from '@testing-library/react';
+import { ReactNode } from 'react';
+import { useUnregisterEntityDialogState } from './useUnregisterEntityDialogState';
+import { TestApiProvider } from '@backstage/test-utils';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
+import { createDeferred } from '@backstage/types';
 
 describe('useUnregisterEntityDialogState', () => {
-  const catalogApiMock = {
-    getOriginLocationByEntity: jest.fn(),
-    getEntities: jest.fn(),
-    removeLocationById: jest.fn(),
-    removeEntityByUid: jest.fn(),
-  };
-  const catalogApi = catalogApiMock as Partial<CatalogApi> as CatalogApi;
+  const catalogApi = catalogApiMock.mock();
 
-  const Wrapper = ({ children }: { children?: React.ReactNode }) => (
-    <ApiProvider apis={ApiRegistry.with(catalogApiRef, catalogApi)}>
-      {children}
-    </ApiProvider>
+  const Wrapper = (props: { children?: ReactNode }) => (
+    <TestApiProvider apis={[[catalogApiRef, catalogApi]]}>
+      {props.children}
+    </TestApiProvider>
   );
 
   let entity: Entity;
@@ -63,17 +40,15 @@ describe('useUnregisterEntityDialogState', () => {
   beforeEach(() => {
     jest.resetAllMocks();
 
-    const deferredLocation = defer<Location | undefined>();
-    const deferredColocatedEntities = defer<Entity[]>();
+    const deferredLocation = createDeferred<Location | undefined>();
+    const deferredColocatedEntities = createDeferred<Entity[]>();
 
     resolveLocation = deferredLocation.resolve;
     resolveColocatedEntities = deferredColocatedEntities.resolve;
 
-    catalogApiMock.getOriginLocationByEntity.mockReturnValue(
-      deferredLocation.promise,
-    );
-    catalogApiMock.getEntities.mockReturnValue(
-      deferredColocatedEntities.promise.then(items => ({ items })),
+    catalogApi.getLocationByRef.mockReturnValue(deferredLocation);
+    catalogApi.getEntities.mockReturnValue(
+      deferredColocatedEntities.then(items => ({ items })),
     );
 
     entity = {
@@ -83,7 +58,7 @@ describe('useUnregisterEntityDialogState', () => {
         name: 'n',
         namespace: 'ns',
         annotations: {
-          [ORIGIN_LOCATION_ANNOTATION]: 'url:https://example.com',
+          [ANNOTATION_ORIGIN_LOCATION]: 'url:https://example.com',
         },
       },
       spec: {},
@@ -91,94 +66,87 @@ describe('useUnregisterEntityDialogState', () => {
   });
 
   it('goes through the happy unregister path', async () => {
-    let rendered: RenderHookResult<unknown, UseUnregisterEntityDialogState>;
-    act(() => {
-      rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
-        wrapper: Wrapper,
-      });
+    const rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
+      wrapper: Wrapper,
     });
 
-    expect(rendered!.result.current).toEqual({ type: 'loading' });
+    expect(rendered.result.current).toEqual({ type: 'loading' });
 
-    resolveLocation({ type: 'url', target: 'https://example.com', id: 'x' });
+    resolveLocation({
+      type: 'url',
+      target: 'https://example.com',
+      id: 'x',
+      entityRef: 'location:default/generated-x',
+    });
     resolveColocatedEntities([entity]);
 
-    await act(async () => {
-      await rendered!.waitForNextUpdate();
-    });
-
-    expect(rendered!.result.current).toEqual({
-      type: 'unregister',
-      location: 'url:https://example.com',
-      colocatedEntities: [{ kind: 'Component', namespace: 'ns', name: 'n' }],
-      unregisterLocation: expect.any(Function),
-      deleteEntity: expect.any(Function),
+    await waitFor(() => {
+      expect(rendered.result.current).toEqual({
+        type: 'unregister',
+        location: 'url:https://example.com',
+        colocatedEntities: [{ kind: 'Component', namespace: 'ns', name: 'n' }],
+        unregisterLocation: expect.any(Function),
+        deleteEntity: expect.any(Function),
+      });
     });
   });
 
   it('chooses the bootstrap path when necessary', async () => {
-    entity.metadata.annotations![ORIGIN_LOCATION_ANNOTATION] =
+    entity.metadata.annotations![ANNOTATION_ORIGIN_LOCATION] =
       'bootstrap:bootstrap';
 
-    let rendered: RenderHookResult<unknown, UseUnregisterEntityDialogState>;
-    act(() => {
-      rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
-        wrapper: Wrapper,
-      });
+    const rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
+      wrapper: Wrapper,
     });
 
-    resolveLocation({ type: 'bootstrap', target: 'bootstrap', id: 'x' });
-    resolveColocatedEntities([]);
-    await act(async () => {
-      await rendered!.waitForNextUpdate();
-    });
-
-    expect(rendered!.result.current).toEqual({
+    resolveLocation({
       type: 'bootstrap',
-      location: 'bootstrap:bootstrap',
-      deleteEntity: expect.any(Function),
+      target: 'bootstrap',
+      id: 'x',
+      entityRef: '',
+    });
+    resolveColocatedEntities([]);
+
+    await waitFor(() => {
+      expect(rendered.result.current).toEqual({
+        type: 'bootstrap',
+        location: 'bootstrap:bootstrap',
+        deleteEntity: expect.any(Function),
+      });
     });
   });
 
   it('chooses only-delete when there was no location annotation', async () => {
-    delete entity.metadata.annotations![ORIGIN_LOCATION_ANNOTATION];
+    delete entity.metadata.annotations![ANNOTATION_ORIGIN_LOCATION];
 
-    let rendered: RenderHookResult<unknown, UseUnregisterEntityDialogState>;
-    act(() => {
-      rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
-        wrapper: Wrapper,
-      });
+    const rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
+      wrapper: Wrapper,
     });
 
     resolveLocation(undefined);
     resolveColocatedEntities([]);
-    await act(async () => {
-      await rendered!.waitForNextUpdate();
-    });
 
-    expect(rendered!.result.current).toEqual({
-      type: 'only-delete',
-      deleteEntity: expect.any(Function),
+    await waitFor(() => {
+      expect(rendered.result.current).toEqual({
+        type: 'only-delete',
+        deleteEntity: expect.any(Function),
+      });
     });
   });
 
   it('chooses only-delete when the location could not be found', async () => {
-    let rendered: RenderHookResult<unknown, UseUnregisterEntityDialogState>;
-    act(() => {
-      rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
-        wrapper: Wrapper,
-      });
+    const rendered = renderHook(() => useUnregisterEntityDialogState(entity), {
+      wrapper: Wrapper,
     });
 
     resolveLocation(undefined);
     resolveColocatedEntities([]);
-    await act(async () => {
-      await rendered!.waitForNextUpdate();
-    });
 
-    expect(rendered!.result.current).toEqual({
-      type: 'only-delete',
-      deleteEntity: expect.any(Function),
+    await waitFor(() => {
+      expect(rendered.result.current).toEqual({
+        type: 'only-delete',
+        deleteEntity: expect.any(Function),
+      });
     });
   });
 });

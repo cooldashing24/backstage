@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { makeStyles, Typography, Grid } from '@material-ui/core';
+import Grid from '@material-ui/core/Grid';
+import { makeStyles } from '@material-ui/core/styles';
+import Typography from '@material-ui/core/Typography';
 import { EmptyStateImage } from './EmptyStateImage';
 
+/** @public */
 export type EmptyStateClassKey = 'root' | 'action' | 'imageContainer';
 
 const useStyles = makeStyles(
@@ -39,10 +41,16 @@ const useStyles = makeStyles(
 type Props = {
   title: string;
   description?: string | JSX.Element;
-  missing: 'field' | 'info' | 'content' | 'data';
+  missing: 'field' | 'info' | 'content' | 'data' | { customImage: JSX.Element };
   action?: JSX.Element;
 };
 
+/**
+ * Various placeholder views for empty state pages
+ *
+ * @public
+ *
+ */
 export function EmptyState(props: Props) {
   const { title, description, missing, action } = props;
   const classes = useStyles();
@@ -69,7 +77,11 @@ export function EmptyState(props: Props) {
         </Grid>
       </Grid>
       <Grid item xs={12} md={6} className={classes.imageContainer}>
-        <EmptyStateImage missing={missing} />
+        {typeof missing === 'string' ? (
+          <EmptyStateImage missing={missing} />
+        ) : (
+          missing.customImage
+        )}
       </Grid>
     </Grid>
   );

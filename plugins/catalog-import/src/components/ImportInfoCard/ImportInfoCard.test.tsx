@@ -14,19 +14,21 @@
  * limitations under the License.
  */
 
-import {
-  ApiProvider,
-  ApiRegistry,
-  ConfigReader,
-} from '@backstage/core-app-api';
+import { ApiProvider, ConfigReader } from '@backstage/core-app-api';
 import { configApiRef } from '@backstage/core-plugin-api';
-import { renderInTestApp } from '@backstage/test-utils';
-import React from 'react';
+import {
+  renderInTestApp,
+  TestApiProvider,
+  TestApiRegistry,
+} from '@backstage/test-utils';
+import { screen } from '@testing-library/react';
 import { CatalogImportApi, catalogImportApiRef } from '../../api';
 import { ImportInfoCard } from './ImportInfoCard';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
+import { catalogImportTranslationRef } from '../../translation';
 
 describe('<ImportInfoCard />', () => {
-  let apis: ApiRegistry;
+  let apis: TestApiRegistry;
   let catalogImportApi: jest.Mocked<CatalogImportApi>;
 
   beforeEach(() => {
@@ -35,54 +37,64 @@ describe('<ImportInfoCard />', () => {
       submitPullRequest: jest.fn(),
     };
 
-    apis = ApiRegistry.with(
-      configApiRef,
-      new ConfigReader({
-        integrations: {
-          github: [{ token: 'my-token' }],
-        },
-      }),
-    ).with(catalogImportApiRef, catalogImportApi);
+    apis = TestApiRegistry.from(
+      [
+        configApiRef,
+        new ConfigReader({
+          integrations: {
+            github: [{ token: 'my-token' }],
+          },
+        }),
+      ],
+      [catalogImportApiRef, catalogImportApi],
+    );
   });
 
   it('renders without exploding', async () => {
-    apis = ApiRegistry.with(
-      configApiRef,
-      new ConfigReader({ integrations: {} }),
-    ).with(catalogImportApiRef, catalogImportApi);
+    let translatedText = '';
 
-    const { getByText } = await renderInTestApp(
-      <ApiProvider apis={apis}>
-        <ImportInfoCard />
-      </ApiProvider>,
+    const TestComponent = () => {
+      const { t } = useTranslationRef(catalogImportTranslationRef);
+      translatedText = t('importInfoCard.title');
+      return <ImportInfoCard />;
+    };
+
+    await renderInTestApp(
+      <TestApiProvider
+        apis={[
+          [configApiRef, new ConfigReader({ integrations: {} })],
+          [catalogImportApiRef, catalogImportApi],
+        ]}
+      >
+        <TestComponent />
+      </TestApiProvider>,
     );
-
-    expect(getByText('Register an existing component')).toBeInTheDocument();
+    expect(screen.getByText(translatedText)).toBeInTheDocument();
   });
 
   it('renders section on GitHub discovery if supported', async () => {
     catalogImportApi.preparePullRequest = async () => ({ title: '', body: '' });
 
-    const { getByText } = await renderInTestApp(
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <ImportInfoCard />
       </ApiProvider>,
     );
 
-    expect(getByText(/The wizard discovers all/)).toBeInTheDocument();
+    expect(screen.getByText(/The wizard discovers all/)).toBeInTheDocument();
   });
 
   it('renders section on pull requests if supported', async () => {
     catalogImportApi.preparePullRequest = async () => ({ title: '', body: '' });
 
-    const { getByText } = await renderInTestApp(
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <ImportInfoCard />
       </ApiProvider>,
     );
 
     expect(
-      getByText(/the wizard will prepare a Pull Request/),
+      screen.getByText(/the wizard will prepare a Pull Request/),
     ).toBeInTheDocument();
   });
 });

@@ -22,36 +22,61 @@ import {
   SupportButton,
 } from '@backstage/core-components';
 import { configApiRef, useApi } from '@backstage/core-plugin-api';
-import { Grid } from '@material-ui/core';
-import React from 'react';
+import { useTranslationRef } from '@backstage/frontend-plugin-api';
+import Grid from '@material-ui/core/Grid';
+import { useTheme } from '@material-ui/core/styles';
+import useMediaQuery from '@material-ui/core/useMediaQuery';
+
+import { catalogImportTranslationRef } from '../../translation';
 import { ImportInfoCard } from '../ImportInfoCard';
 import { ImportStepper } from '../ImportStepper';
 
-export const DefaultImportPage = () => {
+export const ImportPageContent = () => {
+  const { t } = useTranslationRef(catalogImportTranslationRef);
+  const theme = useTheme();
   const configApi = useApi(configApiRef);
-  const appTitle = configApi.getOptional('app.title') || 'Backstage';
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const appTitle = configApi.getOptionalString('app.title') || 'Backstage';
+
+  const contentItems = [
+    <Grid key={0} item xs={12} md={4} lg={6} xl={8}>
+      <ImportInfoCard />
+    </Grid>,
+
+    <Grid key={1} item xs={12} md={8} lg={6} xl={4}>
+      <ImportStepper />
+    </Grid>,
+  ];
+
+  return (
+    <Content>
+      <ContentHeader
+        title={t('defaultImportPage.contentHeaderTitle', { appTitle })}
+      >
+        <SupportButton>
+          {t('defaultImportPage.supportTitle', { appTitle })}
+        </SupportButton>
+      </ContentHeader>
+
+      <Grid container spacing={2}>
+        {isMobile ? contentItems : contentItems.reverse()}
+      </Grid>
+    </Content>
+  );
+};
+
+/**
+ * The default catalog import page.
+ *
+ * @public
+ */
+export const DefaultImportPage = () => {
+  const { t } = useTranslationRef(catalogImportTranslationRef);
 
   return (
     <Page themeId="home">
-      <Header title="Register an existing component" />
-      <Content>
-        <ContentHeader title={`Start tracking your component in ${appTitle}`}>
-          <SupportButton>
-            Start tracking your component in {appTitle} by adding it to the
-            software catalog.
-          </SupportButton>
-        </ContentHeader>
-
-        <Grid container spacing={2} direction="row-reverse">
-          <Grid item xs={12} md={4} lg={6} xl={8}>
-            <ImportInfoCard />
-          </Grid>
-
-          <Grid item xs={12} md={8} lg={6} xl={4}>
-            <ImportStepper />
-          </Grid>
-        </Grid>
-      </Content>
+      <Header title={t('defaultImportPage.headerTitle')} />
+      <ImportPageContent />
     </Page>
   );
 };

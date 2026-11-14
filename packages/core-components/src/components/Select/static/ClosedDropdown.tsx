@@ -13,18 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import React from 'react';
-import { SvgIcon, makeStyles, createStyles } from '@material-ui/core';
+import { makeStyles, createStyles } from '@material-ui/core/styles';
+import SvgIcon from '@material-ui/core/SvgIcon';
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type ClosedDropdownClassKey = 'icon';
 
 const useStyles = makeStyles(
-  () =>
+  theme =>
     createStyles({
       icon: {
         position: 'absolute',
-        right: '4px',
+        right: theme.spacing(0.5),
         pointerEvents: 'none',
+        color: '#616161',
       },
     }),
   { name: 'BackstageClosedDropdown' },
@@ -40,7 +46,7 @@ const ClosedDropdown = () => {
     >
       <path
         d="M7.5 8L6 9.5L12.0703 15.5703L18.1406 9.5L16.6406 8L12.0703 12.5703L7.5 8Z"
-        fill="#616161"
+        fill="currentColor"
       />
     </SvgIcon>
   );

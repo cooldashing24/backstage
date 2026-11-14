@@ -14,20 +14,23 @@
  * limitations under the License.
  */
 
-import React from 'react';
+import { ReactNode } from 'react';
 import {
   FormProvider,
   SubmitHandler,
-  UnpackNestedValue,
   useForm,
   UseFormProps,
   UseFormReturn,
 } from 'react-hook-form';
 
-type Props<TFieldValues extends Record<string, any>> = Pick<
-  UseFormProps<TFieldValues>,
-  'defaultValues'
-> & {
+/**
+ * Props for {@link PreparePullRequestForm}.
+ *
+ * @public
+ */
+export type PreparePullRequestFormProps<
+  TFieldValues extends Record<string, any>,
+> = Pick<UseFormProps<TFieldValues>, 'defaultValues'> & {
   onSubmit: SubmitHandler<TFieldValues>;
 
   render: (
@@ -35,27 +38,28 @@ type Props<TFieldValues extends Record<string, any>> = Pick<
       UseFormReturn<TFieldValues>,
       'formState' | 'register' | 'control' | 'setValue'
     > & {
-      values: UnpackNestedValue<TFieldValues>;
+      values: TFieldValues;
     },
-  ) => React.ReactNode;
+  ) => ReactNode;
 };
 
 /**
  * A form wrapper that creates a form that is used to prepare a pull request. It
  * hosts the form logic.
  *
- * @param defaultValues the default values of the form
- * @param onSubmit a callback that is executed when the form is submitted
+ * @param defaultValues - the default values of the form
+ * @param onSubmit - a callback that is executed when the form is submitted
  *   (initiated by a button of type="submit")
- * @param render render the form elements
+ * @param render - render the form elements
+ * @public
  */
 export const PreparePullRequestForm = <
   TFieldValues extends Record<string, any>,
->({
-  defaultValues,
-  onSubmit,
-  render,
-}: Props<TFieldValues>) => {
+>(
+  props: PreparePullRequestFormProps<TFieldValues>,
+) => {
+  const { defaultValues, onSubmit, render } = props;
+
   const methods = useForm<TFieldValues>({ mode: 'onTouched', defaultValues });
   const { handleSubmit, watch, control, register, formState, setValue } =
     methods;

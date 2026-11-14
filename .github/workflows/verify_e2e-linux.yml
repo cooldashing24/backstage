@@ -1,0 +1,103 @@
+name: E2E Linux
+on:
+  # NOTE: If you change these you must update verify_e2e-linux-noop.yml as well
+  pull_request:
+    paths-ignore:
+      - '.changeset/**'
+      - 'contrib/**'
+      - 'docs/**'
+      - 'microsite/**'
+      - 'beps/**'
+  push:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build:
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14@sha256:14bfab572eec6abf65892e1db7c3ba8d41b2a2855c1b143664907d6e146eb6e1
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432/tcp
+        # needed because the postgres container does not provide a healthcheck
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x, 26.x]
+
+    env:
+      CI: true
+      NODE_OPTIONS: --max-old-space-size=8192 --no-node-snapshot --experimental-vm-modules
+
+    name: E2E Linux ${{ matrix.node-version }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      # Store the PR number for the Sync Pull Requests workflow
+      - name: Save PR context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        if: matrix.node-version == '24.x' && github.event_name == 'pull_request'
+        run: |
+          mkdir -p ./context
+          echo "$PR_NUMBER" > ./context/pr-number
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.node-version == '24.x' && github.event_name == 'pull_request'
+        with:
+          name: pr-context
+          path: context/
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure Git
+        run: |
+          git config --global user.email noreply@backstage.io
+          git config --global user.name 'GitHub e2e user'
+
+      - name: use node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node-version == '26.x' && '26.13.0' || '24.22.1' }}
+          registry-url: https://registry.npmjs.org/ # Needed for auth
+
+      - name: yarn install
+        uses: backstage/actions/yarn-install@a9e1b58ad52aaf319264e18c3ff6887a4c824b52 # v0.7.13
+        with:
+          cache-prefix: ${{ runner.os }}-v${{ matrix.node-version }}
+
+      - run: yarn tsc
+
+      - run: yarn backstage-cli repo build
+
+      - name: run E2E test
+        run: |
+          sudo sysctl fs.inotify.max_user_watches=524288
+          yarn e2e-test run
+        env:
+          BACKSTAGE_TEST_DISABLE_DOCKER: 1
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}

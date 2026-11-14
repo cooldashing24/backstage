@@ -1,0 +1,342 @@
+/*
+ * Copyright 2020 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { createRouteMatcher, matchRouteRefs } from './matchRouteRefs';
+import {
+  RouteRef,
+  ExternalRouteRef,
+  SubRouteRef,
+  AnyRouteRefParams,
+  RouteFunc,
+  RouteResolutionApi,
+  RouteResolutionMatch,
+  AppNode,
+} from '@backstage/frontend-plugin-api';
+import { AnyRouteRef, BackstageRouteObject } from './types';
+import {
+  generatePath,
+  OpaqueRouteRef,
+  OpaqueExternalRouteRef,
+  OpaqueSubRouteRef,
+} from '@internal/frontend';
+import { RouteAliasResolver } from './RouteAliasResolver';
+import { joinPaths } from './joinPaths';
+
+const MAX_CACHED_SOURCE_LOCATIONS = 32;
+
+/**
+ * Resolves the absolute route ref that our target route ref is pointing pointing to, as well
+ * as the relative target path.
+ *
+ * Returns an undefined target ref if one could not be fully resolved.
+ */
+function resolveTargetRef(
+  targetRouteRef: AnyRouteRef,
+  routePaths: Map<RouteRef, string>,
+  routeBindings: Map<AnyRouteRef, AnyRouteRef | undefined>,
+  routeRefsById: Map<string, RouteRef | SubRouteRef>,
+): readonly [RouteRef | undefined, string] {
+  // First we figure out which absolute route ref we're dealing with, an if there was an sub route path to append.
+  // For sub routes it will be the parent path, while for external routes it will be the bound route.
+  let ref: AnyRouteRef = targetRouteRef;
+  let path = '';
+
+  if (OpaqueExternalRouteRef.isType(ref)) {
+    let resolvedRoute = routeBindings.get(ref);
+    if (!routeBindings.has(ref)) {
+      const internal = OpaqueExternalRouteRef.toInternal(ref);
+      const defaultTarget = internal.getDefaultTarget();
+      if (defaultTarget) {
+        resolvedRoute = routeRefsById.get(defaultTarget);
+      }
+    }
+    if (!resolvedRoute) {
+      return [undefined, ''];
+    }
+    ref = resolvedRoute;
+  }
+
+  if (OpaqueSubRouteRef.isType(ref)) {
+    const internal = OpaqueSubRouteRef.toInternal(ref);
+    path = ref.path;
+    ref = internal.getParent();
+  }
+
+  if (!OpaqueRouteRef.isType(ref)) {
+    throw new Error(
+      `Unexpectedly resolved ${targetRouteRef} to a non-route ref ${ref}`,
+    );
+  }
+
+  // Find the path that our target route is bound to
+  const resolvedPath = routePaths.get(ref);
+  if (resolvedPath === undefined) {
+    return [undefined, ''];
+  }
+
+  return [ref, path ? joinPaths(resolvedPath, path) : resolvedPath];
+}
+
+/**
+ * Resolves the complete base path for navigating to the target RouteRef.
+ */
+function resolveBasePath(
+  targetRef: RouteRef,
+  match: NonNullable<ReturnType<typeof matchRouteRefs>>,
+  routePaths: Map<RouteRef, string>,
+  routeParents: Map<RouteRef, RouteRef | undefined>,
+) {
+  // While we search for a common routing root between our current location and
+  // the target route, we build a list of all route refs we find that we need
+  // to traverse to reach the target.
+  const refDiffList = Array<RouteRef>();
+
+  let matchIndex = -1;
+  for (
+    let targetSearchRef: RouteRef | undefined = targetRef;
+    targetSearchRef;
+    targetSearchRef = routeParents.get(targetSearchRef)
+  ) {
+    // The match contains a list of all ancestral route refs present at our current location
+    // Starting at the desired target ref and traversing back through its parents, we search
+    // for a target ref that is present in the match for our current location. When a match
+    // is found it means we have found a common base to resolve the route from.
+    matchIndex = match.findIndex(m =>
+      m.routeObject.routeRefs.has(targetSearchRef!),
+    );
+    if (matchIndex !== -1) {
+      break;
+    }
+
+    // Every time we move a step up in the ancestry of the target ref, we add the current ref
+    // to the diff list, which ends up being the list of route refs to traverse form the common base
+    // in order to reach our target.
+    refDiffList.unshift(targetSearchRef);
+  }
+
+  // If our target route is present in the initial match we need to construct the final path
+  // from the parent of the matched route segment. That's to allow the caller of the route
+  // function to supply their own params.
+  if (refDiffList.length === 0) {
+    matchIndex -= 1;
+  }
+
+  // This is the part of the route tree that the target and source locations have in common.
+  // We re-use the existing pathname directly along with all params.
+  const parentPath = matchIndex === -1 ? '' : match[matchIndex].pathname;
+
+  // This constructs the mid section of the path using paths resolved from all route refs
+  // we need to traverse to reach our target except for the very last one. None of these
+  // paths are allowed to require any parameters, as the caller would have no way of knowing
+  // what parameters those are.
+  const diffPaths = refDiffList.slice(0, -1).map(ref => {
+    const path = routePaths.get(ref);
+    if (path === undefined) {
+      throw new Error(`No path for ${ref}`);
+    }
+    if (path.includes(':')) {
+      throw new Error(
+        `Cannot route to ${targetRef} with parent ${ref} as it has parameters`,
+      );
+    }
+    return path;
+  });
+
+  return `${joinPaths(parentPath, ...diffPaths)}/`;
+}
+
+export class RouteResolver implements RouteResolutionApi {
+  private readonly routePaths: Map<RouteRef, string>;
+  private readonly routeParents: Map<RouteRef, RouteRef | undefined>;
+  private readonly routeObjects: BackstageRouteObject[];
+  private readonly routeBindings: Map<
+    ExternalRouteRef,
+    RouteRef | SubRouteRef | undefined
+  >;
+  private readonly appBasePath: string; // base path without a trailing slash
+  private readonly routeAliasResolver: RouteAliasResolver;
+  private readonly routeRefsById: Map<string, RouteRef | SubRouteRef>;
+  private readonly routeMatches = new Map<
+    string,
+    NonNullable<ReturnType<typeof matchRouteRefs>>
+  >();
+
+  private readonly nodeAncestors = new WeakMap<AppNode, ReadonlySet<AppNode>>();
+  private matchedPathname: string | undefined;
+  private matchedRoutes: { matches: readonly RouteResolutionMatch[] } = {
+    matches: [],
+  };
+  private scopedMatches = new WeakMap<
+    AppNode,
+    { matches: readonly RouteResolutionMatch[] }
+  >();
+
+  constructor(
+    routePaths: Map<RouteRef, string>,
+    routeParents: Map<RouteRef, RouteRef | undefined>,
+    routeObjects: BackstageRouteObject[],
+    routeBindings: Map<ExternalRouteRef, RouteRef | SubRouteRef | undefined>,
+    appBasePath: string, // base path without a trailing slash
+    routeAliasResolver: RouteAliasResolver,
+    routeRefsById: Map<string, RouteRef | SubRouteRef>,
+  ) {
+    this.routePaths = routePaths;
+    this.routeParents = routeParents;
+    this.routeObjects = routeObjects;
+    createRouteMatcher(routeObjects);
+    this.routeBindings = routeBindings;
+    this.appBasePath = appBasePath;
+    this.routeAliasResolver = routeAliasResolver;
+    this.routeRefsById = routeRefsById;
+
+    // Route-bearing nodes identify the app trees. Index every descendant as
+    // well, so non-routing extensions inherit scope without walking at render.
+    const roots = new Set<AppNode>();
+    for (const route of routeObjects) {
+      if (route.appNode) {
+        let root = route.appNode;
+        while (root.edges.attachedTo) {
+          root = root.edges.attachedTo.node;
+        }
+        roots.add(root);
+      }
+    }
+    const indexNode = (node: AppNode, ancestors: ReadonlySet<AppNode>) => {
+      const chain = new Set([...ancestors, node]);
+      this.nodeAncestors.set(node, chain);
+      for (const children of node.edges.attachments.values()) {
+        for (const child of children) {
+          indexNode(child, chain);
+        }
+      }
+    };
+    for (const root of roots) {
+      indexNode(root, new Set());
+    }
+  }
+
+  resolvePath(options: { pathname: string; node?: AppNode }): {
+    matches: readonly RouteResolutionMatch[];
+  } {
+    if (options.pathname !== this.matchedPathname) {
+      this.matchedRoutes = {
+        matches: this.matchSourceLocation(options.pathname).flatMap(match => {
+          const node = match.routeObject.appNode;
+          return node
+            ? [
+                {
+                  node,
+                  basePath: match.pathnameBase,
+                  routePattern: match.routePattern,
+                  params: match.params,
+                  contributesPath: match.routeObject.path.length > 0,
+                },
+              ]
+            : [];
+        }),
+      };
+      this.matchedPathname = options.pathname;
+      this.scopedMatches = new WeakMap();
+    }
+    if (!options.node) {
+      return this.matchedRoutes;
+    }
+    let result = this.scopedMatches.get(options.node);
+    if (!result) {
+      const ancestors = this.nodeAncestors.get(options.node);
+      result = {
+        matches: this.matchedRoutes.matches.filter(match =>
+          ancestors?.has(match.node),
+        ),
+      };
+      this.scopedMatches.set(options.node, result);
+    }
+    return result;
+  }
+
+  resolve<TParams extends AnyRouteRefParams>(
+    anyRouteRef:
+      | RouteRef<TParams>
+      | SubRouteRef<TParams>
+      | ExternalRouteRef<TParams>,
+    options?: { sourcePath?: string },
+  ): RouteFunc<TParams> | undefined {
+    // First figure out what our target absolute ref is, as well as our target path.
+    const [targetRef, targetPath] = resolveTargetRef(
+      anyRouteRef?.$$type === '@backstage/RouteRef'
+        ? this.routeAliasResolver(anyRouteRef)
+        : anyRouteRef,
+      this.routePaths,
+      this.routeBindings,
+      this.routeRefsById,
+    );
+    if (!targetRef) {
+      return undefined;
+    }
+
+    // The location that we get passed in uses the full path, so start by trimming off
+    // the app base path prefix in case we're running the app on a sub-path.
+    const relativeSourceLocation = this.trimPath(options?.sourcePath ?? '');
+
+    // Next we figure out the base path, which is the combination of the common parent path
+    // between our current location and our target location, as well as the additional path
+    // that is the difference between the parent path and the base of our target location.
+    const basePath = resolveBasePath(
+      targetRef,
+      this.matchSourceLocation(relativeSourceLocation),
+      this.routePaths,
+      this.routeParents,
+    );
+
+    const routeFunc: RouteFunc<TParams> = (...[params]) => {
+      // Encoding of dangerous path characters lives in generatePath so direct
+      // callers get the same protection as route-ref resolution.
+      return joinPaths(basePath, generatePath(targetPath, params ?? {}));
+    };
+    return routeFunc;
+  }
+
+  private matchSourceLocation(sourceLocation: string) {
+    // The route tree is fixed for the lifetime of this resolver. Share the match
+    // across links from the same location, retaining only a few recent locations
+    // to avoid unbounded growth as users navigate through parameterized routes.
+    let match = this.routeMatches.get(sourceLocation);
+    if (match) {
+      this.routeMatches.delete(sourceLocation);
+    } else {
+      match = matchRouteRefs(this.routeObjects, sourceLocation) ?? [];
+    }
+    this.routeMatches.set(sourceLocation, match);
+    if (this.routeMatches.size > MAX_CACHED_SOURCE_LOCATIONS) {
+      const oldestLocation = this.routeMatches.keys().next().value;
+      if (oldestLocation !== undefined) {
+        this.routeMatches.delete(oldestLocation);
+      }
+    }
+    return match;
+  }
+
+  private trimPath(targetPath: string) {
+    if (!targetPath) {
+      return targetPath;
+    }
+
+    if (targetPath.startsWith(this.appBasePath)) {
+      return targetPath.slice(this.appBasePath.length);
+    }
+    return targetPath;
+  }
+}

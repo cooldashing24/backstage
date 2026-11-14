@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { JsonObject } from '@backstage/config';
+import { JsonObject } from '@backstage/types';
 import {
   deserializeError as deserializeErrorInternal,
   serializeError as serializeErrorInternal,
 } from 'serialize-error';
+import { isError } from '../errors/assertion';
 
 /**
  * The serialized form of an Error.
@@ -59,6 +60,19 @@ export function serializeError(
 
   if (!options?.includeStack) {
     delete result.stack;
+
+    // serialize-error recursively serializes the entire error cause chain, and
+    // every nested cause carries its own stack. Deleting only the first-level
+    // cause stack would still leak the stacks of deeper causes, so we walk the
+    // whole chain and strip the stack at every level. A visited set guards
+    // against self-referential cause chains that would otherwise loop forever.
+    const visited = new Set<object>();
+    let node: any = result.cause;
+    while (node && typeof node === 'object' && !visited.has(node)) {
+      visited.add(node);
+      delete node.stack;
+      node = node.cause;
+    }
   }
 
   return result;
@@ -77,4 +91,20 @@ export function deserializeError<T extends Error = Error>(
     result.stack = undefined;
   }
   return result;
+}
+
+/**
+ * Stringifies an error, including its name and message where available.
+ *
+ * @param error - The error.
+ * @public
+ */
+export function stringifyError(error: unknown): string {
+  if (isError(error)) {
+    // Prefer error.toString, but if it's not implemented we use a nicer fallback
+    const str = String(error);
+    return str !== '[object Object]' ? str : `${error.name}: ${error.message}`;
+  }
+
+  return `unknown error '${error}'`;
 }

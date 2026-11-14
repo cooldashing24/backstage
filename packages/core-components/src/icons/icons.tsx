@@ -14,49 +14,177 @@
  * limitations under the License.
  */
 
+import { IconComponent, useApp } from '@backstage/core-plugin-api';
 import MuiBrokenImageIcon from '@material-ui/icons/BrokenImage';
-import React, { ComponentProps } from 'react';
-import { useApp, IconComponent } from '@backstage/core-plugin-api';
+import { ComponentProps } from 'react';
 
-type IconComponentProps = ComponentProps<IconComponent>;
+/**
+ * @public
+ * Props for the {@link @backstage/core-plugin-api#IconComponent} component.
+ * @deprecated Legacy icon wrapper props. The new frontend system's
+ * `useApi(coreApis.icons).icon(key)` returns an icon element to render directly;
+ * import `useApi` and `coreApis` from `@backstage/frontend-plugin-api`.
+ */
+export type IconComponentProps = ComponentProps<IconComponent>;
 
-function useSystemIcon(key: string, props: IconComponentProps) {
+/**
+ * @public
+ * Props for the {@link AppIcon} component.
+ * @deprecated Legacy icon wrapper props. See {@link AppIcon} for migration guidance.
+ */
+export type AppIconProps = IconComponentProps & {
+  // The key of the system icon to render.
+  id: string;
+  // An optional fallback icon component to render when the system icon is not found.
+  // Default to () => null.
+  Fallback?: IconComponent;
+};
+
+/**
+ * @public
+ * A component that renders a system icon by its id.
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon(id)`, importing `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api`, to retain app icon customization. Render the
+ * returned icon element directly and handle an undefined result with your own
+ * fallback; this is not an icon component accepting the legacy wrapper props.
+ */
+export function AppIcon(props: AppIconProps) {
+  const { id: key, Fallback = MuiBrokenImageIcon, ...rest } = props;
   const app = useApp();
-  const Icon = app.getSystemIcon(key);
-  return Icon ? <Icon {...props} /> : <MuiBrokenImageIcon {...props} />;
+  const Icon = app.getSystemIcon(key) ?? Fallback;
+  return <Icon {...rest} />;
 }
 
 // Should match the list of overridable system icon keys in @backstage/core-app-api
+/**
+ * Broken Image Icon
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('brokenImage')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function BrokenImageIcon(props: IconComponentProps) {
-  return useSystemIcon('brokenImage', props);
+  return <AppIcon id="brokenImage" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('catalog')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function CatalogIcon(props: IconComponentProps) {
-  return useSystemIcon('catalog', props);
+  return <AppIcon id="catalog" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('chat')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function ChatIcon(props: IconComponentProps) {
-  return useSystemIcon('chat', props);
+  return <AppIcon id="chat" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('dashboard')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function DashboardIcon(props: IconComponentProps) {
-  return useSystemIcon('dashboard', props);
+  return <AppIcon id="dashboard" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('docs')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function DocsIcon(props: IconComponentProps) {
-  return useSystemIcon('docs', props);
+  return <AppIcon id="docs" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('email')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function EmailIcon(props: IconComponentProps) {
-  return useSystemIcon('email', props);
+  return <AppIcon id="email" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('github')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function GitHubIcon(props: IconComponentProps) {
-  return useSystemIcon('github', props);
+  return <AppIcon id="github" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('group')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function GroupIcon(props: IconComponentProps) {
-  return useSystemIcon('group', props);
+  return <AppIcon id="group" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('help')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function HelpIcon(props: IconComponentProps) {
-  return useSystemIcon('help', props);
+  return <AppIcon id="help" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('user')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function UserIcon(props: IconComponentProps) {
-  return useSystemIcon('user', props);
+  return <AppIcon id="user" {...props} />;
 }
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('warning')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
 export function WarningIcon(props: IconComponentProps) {
-  return useSystemIcon('warning', props);
+  return <AppIcon id="warning" {...props} />;
+}
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('star')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
+export function StarIcon(props: IconComponentProps) {
+  return <AppIcon id="star" {...props} />;
+}
+/**
+ * @public
+ * @deprecated Legacy icon wrapper, superseded for new frontend development. Use
+ * `useApi(coreApis.icons).icon('unstarred')` with `useApi` and `coreApis` from
+ * `@backstage/frontend-plugin-api` to retain app icon customization. Render the
+ * returned icon element directly, handling an undefined result as needed.
+ */
+export function UnstarredIcon(props: IconComponentProps) {
+  return <AppIcon id="unstarred" {...props} />;
 }

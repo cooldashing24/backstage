@@ -15,13 +15,18 @@
  */
 
 import {
-  BackstageIdentity,
+  BackstageIdentityResponse,
   configApiRef,
   SignInPageProps,
+  useAnalytics,
   useApi,
 } from '@backstage/core-plugin-api';
-import { Button, Grid, Typography } from '@material-ui/core';
-import React, { useState } from 'react';
+import { UserIdentity } from './UserIdentity';
+import Button from '@material-ui/core/Button';
+import Grid from '@material-ui/core/Grid';
+import Typography from '@material-ui/core/Typography';
+import { ComponentType, ReactNode, useMemo, useState } from 'react';
+import { useMountEffect } from '@react-hookz/web';
 import { Progress } from '../../components/Progress';
 import { Content } from '../Content/Content';
 import { ContentHeader } from '../ContentHeader/ContentHeader';
@@ -31,14 +36,26 @@ import { Page } from '../Page';
 import { getSignInProviders, useSignInProviders } from './providers';
 import { GridItem, useStyles } from './styles';
 import { IdentityProviders, SignInProviderConfig } from './types';
+import { coreComponentsTranslationRef } from '../../translation';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
+import { useSearchParams } from 'react-router-dom';
 
-type MultiSignInPageProps = SignInPageProps & {
+type CommonSignInPageProps = SignInPageProps & {
+  /**
+   * Error component to be rendered instead of the default error panel in case
+   * sign in fails.
+   */
+  ErrorComponent?: ComponentType<{ error?: Error }>;
+};
+
+type MultiSignInPageProps = CommonSignInPageProps & {
   providers: IdentityProviders;
   title?: string;
+  titleComponent?: ReactNode;
   align?: 'center' | 'left';
 };
 
-type SingleSignInPageProps = SignInPageProps & {
+type SingleSignInPageProps = CommonSignInPageProps & {
   provider: SignInProviderConfig;
   auto?: boolean;
 };
@@ -46,18 +63,22 @@ type SingleSignInPageProps = SignInPageProps & {
 export type Props = MultiSignInPageProps | SingleSignInPageProps;
 
 export const MultiSignInPage = ({
-  onResult,
+  onSignInSuccess,
   providers = [],
   title,
+  titleComponent,
   align = 'left',
 }: MultiSignInPageProps) => {
   const configApi = useApi(configApiRef);
   const classes = useStyles();
 
-  const signInProviders = getSignInProviders(providers);
+  const signInProviders = useMemo(
+    () => getSignInProviders(providers),
+    [providers],
+  );
   const [loading, providerElements] = useSignInProviders(
     signInProviders,
-    onResult,
+    onSignInSuccess,
   );
 
   if (loading) {
@@ -68,7 +89,13 @@ export const MultiSignInPage = ({
     <Page themeId="home">
       <Header title={configApi.getString('app.title')} />
       <Content>
-        {title && <ContentHeader title={title} textAlign={align} />}
+        {(title || titleComponent) && (
+          <ContentHeader
+            title={title}
+            titleComponent={titleComponent}
+            textAlign={align}
+          />
+        )}
         <Grid
           container
           justifyContent={align === 'center' ? align : 'flex-start'}
@@ -84,71 +111,81 @@ export const MultiSignInPage = ({
 };
 
 export const SingleSignInPage = ({
-  onResult,
   provider,
   auto,
+  onSignInSuccess,
+  ErrorComponent,
 }: SingleSignInPageProps) => {
   const classes = useStyles();
   const authApi = useApi(provider.apiRef);
   const configApi = useApi(configApiRef);
+  const { t } = useTranslationRef(coreComponentsTranslationRef);
+  const analytics = useAnalytics();
 
   const [error, setError] = useState<Error>();
-  const [loginCount, setLoginCount] = useState(0);
 
   // The SignIn component takes some time to decide whether the user is logged-in or not.
   // showLoginPage is used to prevent a glitch-like experience where the sign-in page is
   // displayed for a split second when the user is already logged-in.
   const [showLoginPage, setShowLoginPage] = useState<boolean>(false);
 
+  // User was redirected back to sign in page with error from auth redirect flow
+  const [searchParams, _setSearchParams] = useSearchParams();
+  const errorParam = searchParams.get('error');
+
   type LoginOpts = { checkExisting?: boolean; showPopup?: boolean };
   const login = async ({ checkExisting, showPopup }: LoginOpts) => {
-    setLoginCount(prev => prev + 1);
     try {
-      let identity: BackstageIdentity | undefined;
+      let identityResponse: BackstageIdentityResponse | undefined;
       if (checkExisting) {
         // Do an initial check if any logged-in session exists
-        identity = await authApi.getBackstageIdentity({
+        identityResponse = await authApi.getBackstageIdentity({
           optional: true,
         });
       }
 
       // If no session exists, show the sign-in page
-      if (!identity && (showPopup || auto)) {
+      if (!identityResponse && (showPopup || auto) && !errorParam) {
         // Unless auto is set to true, this step should not happen.
         // When user intentionally clicks the Sign In button, autoShowPopup is set to true
         setShowLoginPage(true);
-        identity = await authApi.getBackstageIdentity({
+        identityResponse = await authApi.getBackstageIdentity({
           instantPopup: true,
         });
+        if (!identityResponse) {
+          throw new Error(
+            `The ${provider.title} provider is not configured to support sign-in`,
+          );
+        }
       }
 
-      if (!identity) {
+      if (!identityResponse) {
         setShowLoginPage(true);
         return;
       }
 
       const profile = await authApi.getProfile();
-      onResult({
-        userId: identity!.id,
-        profile: profile!,
-        getIdToken: () => {
-          return authApi
-            .getBackstageIdentity()
-            .then(i => i!.token ?? i!.idToken);
-        },
-        signOut: async () => {
-          await authApi.signOut();
-        },
-      });
+      onSignInSuccess(
+        UserIdentity.create({
+          identity: identityResponse.identity,
+          authApi,
+          profile,
+        }),
+      );
+      analytics.captureEvent('signIn', 'success');
     } catch (err: any) {
       // User closed the sign-in modal
       setError(err);
       setShowLoginPage(true);
     }
   };
-  if (loginCount === 0) {
+
+  useMountEffect(() => {
+    if (errorParam) {
+      setError(new Error(errorParam));
+    }
     login({ checkExisting: true });
-  }
+  });
 
   return showLoginPage ? (
     <Page themeId="home">
@@ -173,16 +210,20 @@ export const SingleSignInPage = ({
                     login({ showPopup: true });
                   }}
                 >
-                  Sign In
+                  {t('signIn.title')}
                 </Button>
               }
             >
               <Typography variant="body1">{provider.message}</Typography>
-              {error && error.name !== 'PopupRejectedError' && (
-                <Typography variant="body1" color="error">
-                  {error.message}
-                </Typography>
-              )}
+              {error &&
+                error.name !== 'PopupRejectedError' &&
+                (ErrorComponent ? (
+                  <ErrorComponent error={error} />
+                ) : (
+                  <Typography variant="body1" color="error">
+                    {error.message}
+                  </Typography>
+                ))}
             </InfoCard>
           </GridItem>
         </Grid>

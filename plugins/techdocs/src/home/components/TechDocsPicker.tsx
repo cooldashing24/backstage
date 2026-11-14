@@ -15,17 +15,18 @@
  */
 
 import { useEffect } from 'react';
+import { FilterPredicate } from '@backstage/filter-predicates';
 import {
-  CATALOG_FILTER_EXISTS,
   DefaultEntityFilters,
   EntityFilter,
-  useEntityListProvider,
+  useEntityList,
 } from '@backstage/plugin-catalog-react';
+import { TECHDOCS_ANNOTATION } from '@backstage/plugin-techdocs-common';
 
 class TechDocsFilter implements EntityFilter {
-  getCatalogFilters(): Record<string, string | symbol | (string | symbol)[]> {
+  getCatalogQuery(): FilterPredicate {
     return {
-      'metadata.annotations.backstage.io/techdocs-ref': CATALOG_FILTER_EXISTS,
+      [`metadata.annotations.${TECHDOCS_ANNOTATION}`]: { $exists: true },
     };
   }
 }
@@ -34,8 +35,13 @@ type CustomFilters = DefaultEntityFilters & {
   techdocs?: TechDocsFilter;
 };
 
+/**
+ * Component responsible for updating TechDocs filters
+ *
+ * @public
+ */
 export const TechDocsPicker = () => {
-  const { updateFilters } = useEntityListProvider<CustomFilters>();
+  const { updateFilters } = useEntityList<CustomFilters>();
 
   useEffect(() => {
     updateFilters({

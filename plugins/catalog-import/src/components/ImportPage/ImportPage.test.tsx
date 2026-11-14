@@ -14,85 +14,69 @@
  * limitations under the License.
  */
 
-import { CatalogClient } from '@backstage/catalog-client';
-import {
-  ApiProvider,
-  ApiRegistry,
-  ConfigReader,
-} from '@backstage/core-app-api';
-import { configApiRef } from '@backstage/core-plugin-api';
+import { ApiProvider, ConfigReader } from '@backstage/core-app-api';
+import { FetchApi, configApiRef } from '@backstage/core-plugin-api';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
-import { renderInTestApp } from '@backstage/test-utils';
-import React from 'react';
-import { useOutlet } from 'react-router';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
+import { renderInTestApp, TestApiRegistry } from '@backstage/test-utils';
+import { screen } from '@testing-library/react';
+import { useOutlet } from 'react-router-dom';
 import { catalogImportApiRef, CatalogImportClient } from '../../api';
 import { ImportPage } from './ImportPage';
 
-jest.mock('react-router', () => ({
-  ...jest.requireActual('react-router'),
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
   useOutlet: jest.fn(),
 }));
 
 describe('<ImportPage />', () => {
-  const identityApi = {
-    getUserId: () => {
-      return 'user';
-    },
-    getProfile: () => {
-      return {};
-    },
-    getIdToken: () => {
-      return Promise.resolve('token');
-    },
-    signOut: () => {
-      return Promise.resolve();
-    },
+  const fetchApi: FetchApi = {
+    fetch: jest.fn(),
   };
 
-  let apis: ApiRegistry;
+  let apis: TestApiRegistry;
 
   beforeEach(() => {
-    apis = ApiRegistry.with(
-      configApiRef,
-      new ConfigReader({ integrations: {} }),
-    )
-      .with(catalogApiRef, new CatalogClient({ discoveryApi: {} as any }))
-      .with(
+    apis = TestApiRegistry.from(
+      [configApiRef, new ConfigReader({ integrations: {} })],
+      [catalogApiRef, catalogApiMock()],
+      [
         catalogImportApiRef,
         new CatalogImportClient({
           discoveryApi: {} as any,
-          identityApi,
+          fetchApi,
           scmAuthApi: {} as any,
           scmIntegrationsApi: {} as any,
           catalogApi: {} as any,
           configApi: new ConfigReader({}),
         }),
-      );
+      ],
+    );
   });
 
   afterEach(() => jest.resetAllMocks());
 
   it('renders without exploding', async () => {
-    const { getByText } = await renderInTestApp(
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <ImportPage />
       </ApiProvider>,
     );
 
     expect(
-      getByText('Start tracking your component in Backstage'),
+      screen.getByText('Start tracking your component in Backstage'),
     ).toBeInTheDocument();
   });
 
   it('renders with custom children', async () => {
     (useOutlet as jest.Mock).mockReturnValue(<div>Hello World</div>);
 
-    const { getByText } = await renderInTestApp(
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <ImportPage />
       </ApiProvider>,
     );
 
-    expect(getByText('Hello World')).toBeInTheDocument();
+    expect(screen.getByText('Hello World')).toBeInTheDocument();
   });
 });

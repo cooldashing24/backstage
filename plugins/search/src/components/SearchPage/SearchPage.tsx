@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-import React, { useEffect } from 'react';
-import { usePrevious } from 'react-use';
+import { useEffect } from 'react';
+import usePrevious from 'react-use/esm/usePrevious';
 import qs from 'qs';
-import { useLocation, useOutlet } from 'react-router';
-import { SearchContextProvider, useSearch } from '../SearchContext';
-import { JsonObject } from '@backstage/config';
-import { LegacySearchPage } from '../LegacySearchPage';
+import { useLocation, useOutlet } from 'react-router-dom';
+import {
+  SearchContextProvider,
+  useSearch,
+} from '@backstage/plugin-search-react';
+import { JsonObject } from '@backstage/types';
 
 export const UrlUpdater = () => {
   const location = useLocation();
@@ -43,7 +45,7 @@ export const UrlUpdater = () => {
     }
 
     const query =
-      qs.parse(location.search.substring(1), { arrayLimit: 0 }) || {};
+      qs.parse(location.search.substring(1), { arrayLimit: 10000 }) || {};
 
     if (query.filters) {
       setFilters(query.filters as JsonObject);
@@ -57,9 +59,7 @@ export const UrlUpdater = () => {
       setPageCursor(query.pageCursor as string);
     }
 
-    if (query.types) {
-      setTypes(query.types as string[]);
-    }
+    setTypes(query.types ? (query.types as string[]) : []);
   }, [prevQueryParams, location, setTerm, setTypes, setPageCursor, setFilters]);
 
   useEffect(() => {
@@ -84,13 +84,16 @@ export const UrlUpdater = () => {
   return null;
 };
 
+/**
+ * @public
+ */
 export const SearchPage = () => {
   const outlet = useOutlet();
 
   return (
     <SearchContextProvider>
       <UrlUpdater />
-      {outlet || <LegacySearchPage />}
+      {outlet}
     </SearchContextProvider>
   );
 };

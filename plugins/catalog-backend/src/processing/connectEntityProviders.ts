@@ -1,0 +1,127 @@
+/*
+ * Copyright 2021 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  Entity,
+  entityEnvelopeSchemaValidator,
+} from '@backstage/catalog-model';
+import { ProviderDatabase } from '../database/types';
+import {
+  EntityProvider,
+  EntityProviderConnection,
+  EntityProviderRefreshOptions,
+  EntityProviderMutation,
+} from '@backstage/plugin-catalog-node';
+import type { ExtensionPointFactoryContext } from '@backstage/backend-plugin-api';
+import { ForwardedError } from '@backstage/errors';
+
+export type EntityProviderEntry = {
+  provider: EntityProvider;
+  context?: ExtensionPointFactoryContext;
+};
+
+class Connection implements EntityProviderConnection {
+  readonly validateEntityEnvelope = entityEnvelopeSchemaValidator();
+  private readonly config: {
+    id: string;
+    providerDatabase: ProviderDatabase;
+  };
+
+  constructor(config: { id: string; providerDatabase: ProviderDatabase }) {
+    this.config = config;
+  }
+
+  async applyMutation(mutation: EntityProviderMutation): Promise<void> {
+    const db = this.config.providerDatabase;
+
+    if (mutation.type === 'full') {
+      this.check(mutation.entities.map(e => e.entity));
+      const options = await db.prepareUnprocessedEntities({
+        sourceKey: this.config.id,
+        type: 'full',
+        items: mutation.entities,
+      });
+      await db.transaction(async tx => {
+        await db.replaceUnprocessedEntities(tx, options);
+      });
+    } else if (mutation.type === 'delta') {
+      this.check(mutation.added.map(e => e.entity));
+      this.check(
+        mutation.removed
+          .map(e => ('entity' in e ? e.entity : undefined))
+          .filter((e): e is Entity => Boolean(e)),
+      );
+      const options = await db.prepareUnprocessedEntities({
+        sourceKey: this.config.id,
+        type: 'delta',
+        added: mutation.added,
+        removed: mutation.removed,
+      });
+      await db.transaction(async tx => {
+        await db.replaceUnprocessedEntities(tx, options);
+      });
+    }
+  }
+
+  async refresh(options: EntityProviderRefreshOptions): Promise<void> {
+    const db = this.config.providerDatabase;
+
+    await db.transaction(async (tx: any) => {
+      return db.refreshByRefreshKeys(tx, {
+        keys: options.keys,
+      });
+    });
+  }
+
+  private check(entities: Entity[]) {
+    for (const entity of entities) {
+      try {
+        this.validateEntityEnvelope(entity);
+      } catch (e) {
+        throw new TypeError(`Malformed entity envelope, ${e}`);
+      }
+    }
+  }
+}
+
+export async function connectEntityProviders(
+  db: ProviderDatabase,
+  providers: EntityProviderEntry[],
+) {
+  await Promise.all(
+    providers.map(async entry => {
+      const { provider, context } = entry;
+      const connection = new Connection({
+        id: provider.getProviderName(),
+        providerDatabase: db,
+      });
+      try {
+        await provider.connect(connection);
+      } catch (error: unknown) {
+        if (context) {
+          context.reportModuleStartupFailure({
+            error: new ForwardedError(
+              `Failed to connect entity provider '${provider.getProviderName()}'`,
+              error,
+            ),
+          });
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
+}

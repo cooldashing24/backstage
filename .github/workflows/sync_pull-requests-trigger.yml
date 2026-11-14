@@ -1,0 +1,56 @@
+name: Sync Pull Requests Trigger
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - closed
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - converted_to_draft
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: none
+  contents: none
+  pull-requests: none
+
+jobs:
+  trigger:
+    if: >
+      github.repository == 'backstage/backstage' &&
+      github.event.sender.type != 'Bot' &&
+      (github.event.pull_request || github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Save PR context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          LABEL_ADDED: ${{ github.event.action == 'labeled' && github.event.label.name || '' }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          ACTOR: ${{ github.actor }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          mkdir -p ./context
+          echo "$PR_NUMBER" > ./context/pr-number
+          echo "$LABEL_ADDED" > ./context/label-added
+          echo "$REVIEW_STATE" > ./context/review-state
+          echo "$ACTOR" > ./context/actor
+          echo "$ACTION" > ./context/action
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pr-context
+          path: context/
+          overwrite: true

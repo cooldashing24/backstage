@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-import React, { ReactNode, useState, useEffect } from 'react';
+import { ReactNode, useMemo } from 'react';
 import { useApi, storageApiRef } from '@backstage/core-plugin-api';
-import { useObservable } from 'react-use';
+import useObservable from 'react-use/esm/useObservable';
 import classNames from 'classnames';
-import { makeStyles } from '@material-ui/core';
-import { BackstageTheme } from '@backstage/theme';
+import { makeStyles } from '@material-ui/core/styles';
 import Snackbar from '@material-ui/core/Snackbar';
 import SnackbarContent from '@material-ui/core/SnackbarContent';
 import IconButton from '@material-ui/core/IconButton';
 import Close from '@material-ui/icons/Close';
 
-export type DismissbleBannerClassKey =
+/** @public */
+export type DismissableBannerClassKey =
   | 'root'
   | 'topPosition'
   | 'icon'
@@ -34,8 +34,14 @@ export type DismissbleBannerClassKey =
   | 'info'
   | 'error';
 
+/**
+ * @public
+ * @deprecated This type contained a typo, please use DismissableBannerClassKey instead
+ */
+export type DismissbleBannerClassKey = DismissableBannerClassKey;
+
 const useStyles = makeStyles(
-  (theme: BackstageTheme) => ({
+  theme => ({
     root: {
       padding: theme.spacing(0),
       marginBottom: theme.spacing(0),
@@ -51,19 +57,23 @@ const useStyles = makeStyles(
       zIndex: 'unset',
     },
     icon: {
-      fontSize: 20,
+      fontSize: theme.typography.h6.fontSize,
     },
     content: {
       width: '100%',
       maxWidth: 'inherit',
+      flexWrap: 'nowrap',
+      color: theme.palette.banner.text,
     },
     message: {
       display: 'flex',
       alignItems: 'center',
-      color: theme.palette.banner.text,
       '& a': {
         color: theme.palette.banner.link,
       },
+    },
+    button: {
+      color: theme.palette.banner.closeButtonColor ?? 'inherit',
     },
     info: {
       backgroundColor: theme.palette.banner.info,
@@ -71,39 +81,38 @@ const useStyles = makeStyles(
     error: {
       backgroundColor: theme.palette.banner.error,
     },
+    warning: {
+      backgroundColor:
+        theme.palette.banner.warning ?? theme.palette.banner.error,
+    },
   }),
   { name: 'BackstageDismissableBanner' },
 );
 
-type Props = {
-  variant: 'info' | 'error';
+export type Props = {
+  variant: 'info' | 'error' | 'warning';
   message: ReactNode;
   id: string;
   fixed?: boolean;
 };
 
+/** @public */
 export const DismissableBanner = (props: Props) => {
   const { variant, message, id, fixed = false } = props;
   const classes = useStyles();
   const storageApi = useApi(storageApiRef);
   const notificationsStore = storageApi.forBucket('notifications');
-  const rawDismissedBanners =
-    notificationsStore.get<string[]>('dismissedBanners') ?? [];
-
-  const [dismissedBanners, setDismissedBanners] = useState(
-    new Set(rawDismissedBanners),
-  );
-
   const observedItems = useObservable(
     notificationsStore.observe$<string[]>('dismissedBanners'),
+    notificationsStore.snapshot<string[]>('dismissedBanners'),
   );
 
-  useEffect(() => {
-    if (observedItems?.newValue) {
-      const currentValue = observedItems?.newValue ?? [];
-      setDismissedBanners(new Set(currentValue));
-    }
-  }, [observedItems?.newValue]);
+  const dismissedBanners = useMemo(
+    () => new Set(observedItems.value ?? []),
+    [observedItems.value],
+  );
+
+  const loadingSettings = observedItems.presence === 'unknown';
 
   const handleClick = () => {
     notificationsStore.set('dismissedBanners', [...dismissedBanners, id]);
@@ -116,7 +125,7 @@ export const DismissableBanner = (props: Props) => {
           ? { vertical: 'bottom', horizontal: 'center' }
           : { vertical: 'top', horizontal: 'center' }
       }
-      open={!dismissedBanners.has(id)}
+      open={!loadingSettings && !dismissedBanners.has(id)}
       classes={{
         root: classNames(classes.root, !fixed && classes.topPosition),
       }}
@@ -131,7 +140,7 @@ export const DismissableBanner = (props: Props) => {
           <IconButton
             key="dismiss"
             title="Permanently dismiss this message"
-            color="inherit"
+            className={classes.button}
             onClick={handleClick}
           >
             <Close className={classes.icon} />

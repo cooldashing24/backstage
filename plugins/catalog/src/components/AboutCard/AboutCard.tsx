@@ -14,181 +14,217 @@
  * limitations under the License.
  */
 
+import { useCallback } from 'react';
+
+import IconButton from '@material-ui/core/IconButton';
+import CachedIcon from '@material-ui/icons/Cached';
+import EditIcon from '@material-ui/icons/Edit';
+import DocsIcon from '@material-ui/icons/Description';
+import CreateComponentIcon from '@material-ui/icons/AddCircleOutline';
+
 import {
-  Entity,
-  ENTITY_DEFAULT_NAMESPACE,
-  LOCATION_ANNOTATION,
-  RELATION_CONSUMES_API,
-  RELATION_PROVIDES_API,
-  stringifyEntityRef,
-} from '@backstage/catalog-model';
-import {
+  AppIcon,
   HeaderIconLinkRow,
   IconLinkVerticalProps,
-  InfoCardVariants,
   Link,
 } from '@backstage/core-components';
-import { alertApiRef, useApi, useRouteRef } from '@backstage/core-plugin-api';
+import { EntityInfoCard } from '@backstage/plugin-catalog-react';
 import {
-  ScmIntegrationIcon,
-  scmIntegrationsApiRef,
-} from '@backstage/integration-react';
+  alertApiRef,
+  errorApiRef,
+  useApp,
+  useApi,
+  useRouteRef,
+} from '@backstage/core-plugin-api';
+import { useTranslationRef } from '@backstage/core-plugin-api/alpha';
+
 import {
-  catalogApiRef,
-  getEntityMetadataEditUrl,
-  getEntityRelations,
-  getEntitySourceLocation,
-  useEntity,
-} from '@backstage/plugin-catalog-react';
+  DEFAULT_NAMESPACE,
+  ANNOTATION_EDIT_URL,
+  ANNOTATION_LOCATION,
+  stringifyEntityRef,
+} from '@backstage/catalog-model';
+import { catalogApiRef, useEntity } from '@backstage/plugin-catalog-react';
+import { useEntityPermission } from '@backstage/plugin-catalog-react/alpha';
+import { catalogEntityRefreshPermission } from '@backstage/plugin-catalog-common/alpha';
+
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  Divider,
-  IconButton,
-  makeStyles,
-} from '@material-ui/core';
-import CachedIcon from '@material-ui/icons/Cached';
-import DocsIcon from '@material-ui/icons/Description';
-import EditIcon from '@material-ui/icons/Edit';
-import ExtensionIcon from '@material-ui/icons/Extension';
-import React, { useCallback } from 'react';
-import { viewTechDocRouteRef } from '../../routes';
+  TECHDOCS_ANNOTATION,
+  TECHDOCS_EXTERNAL_ANNOTATION,
+} from '@backstage/plugin-techdocs-common';
+import { buildTechDocsURL } from '@backstage/plugin-techdocs-react';
+
+import { isTemplateEntityV1beta3 } from '@backstage/plugin-scaffolder-common';
+import { taskCreatePermission } from '@backstage/plugin-scaffolder-common/alpha';
+
+import { usePermission } from '@backstage/plugin-permission-react';
+
+import { createFromTemplateRouteRef, viewTechDocRouteRef } from '../../routes';
+import { catalogTranslationRef } from '../../alpha/translation';
+import { useSourceTemplateCompoundEntityRef } from './hooks';
 import { AboutContent } from './AboutContent';
+import { makeStyles } from '@material-ui/core/styles';
+import { useCatalogSourceIconLinkProps } from './useCatalogSourceIconLinkProps';
 
 const useStyles = makeStyles({
-  gridItemCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: 'calc(100% - 10px)', // for pages without content header
-    marginBottom: '10px',
-  },
-  fullHeightCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-  },
-  gridItemCardContent: {
-    flex: 1,
-  },
-  fullHeightCardContent: {
-    flex: 1,
+  linkContainer: {
+    border: '1px solid var(--bui-border-1)',
+    borderLeft: 'none',
+    borderRight: 'none',
+    marginBottom: 'var(--bui-space-6)',
   },
 });
 
-type AboutCardProps = {
-  /** @deprecated The entity is now grabbed from context instead */
-  entity?: Entity;
-  variant?: InfoCardVariants;
-};
-
-export function AboutCard({ variant }: AboutCardProps) {
-  const classes = useStyles();
+// TODO: This hook is duplicated from the TechDocs plugin for backwards compatibility
+// Remove it when the legacy frontend system support is dropped.
+function useTechdocsReaderIconLinkProps(): IconLinkVerticalProps {
   const { entity } = useEntity();
-  const scmIntegrationsApi = useApi(scmIntegrationsApiRef);
-  const catalogApi = useApi(catalogApiRef);
-  const alertApi = useApi(alertApiRef);
   const viewTechdocLink = useRouteRef(viewTechDocRouteRef);
+  const { t } = useTranslationRef(catalogTranslationRef);
 
-  const entitySourceLocation = getEntitySourceLocation(
-    entity,
-    scmIntegrationsApi,
-  );
-  const entityMetadataEditUrl = getEntityMetadataEditUrl(entity);
-  const providesApiRelations = getEntityRelations(
-    entity,
-    RELATION_PROVIDES_API,
-  );
-  const consumesApiRelations = getEntityRelations(
-    entity,
-    RELATION_CONSUMES_API,
-  );
-  const hasApis =
-    providesApiRelations.length > 0 || consumesApiRelations.length > 0;
-
-  const viewInSource: IconLinkVerticalProps = {
-    label: 'View Source',
-    disabled: !entitySourceLocation,
-    icon: <ScmIntegrationIcon type={entitySourceLocation?.integrationType} />,
-    href: entitySourceLocation?.locationTargetUrl,
-  };
-  const viewInTechDocs: IconLinkVerticalProps = {
-    label: 'View TechDocs',
+  return {
+    label: t('aboutCard.viewTechdocs'),
     disabled:
-      !entity.metadata.annotations?.['backstage.io/techdocs-ref'] ||
-      !viewTechdocLink,
+      !(
+        entity.metadata.annotations?.[TECHDOCS_ANNOTATION] ||
+        entity.metadata.annotations?.[TECHDOCS_EXTERNAL_ANNOTATION]
+      ) || !viewTechdocLink,
     icon: <DocsIcon />,
+    href: buildTechDocsURL(entity, viewTechdocLink),
+  };
+}
+
+// TODO: This hook is duplicated from the Scaffolder plugin for backwards compatibility
+// Remove it when the legacy frontend system support is dropped.
+function useScaffolderTemplateIconLinkProps(): IconLinkVerticalProps {
+  const app = useApp();
+  const { entity } = useEntity();
+  const templateRoute = useRouteRef(createFromTemplateRouteRef);
+  const { t } = useTranslationRef(catalogTranslationRef);
+  const Icon = app.getSystemIcon('scaffolder') ?? CreateComponentIcon;
+  const { allowed: canCreateTemplateTask } = usePermission({
+    permission: taskCreatePermission,
+  });
+
+  return {
+    label: t('aboutCard.launchTemplate'),
+    icon: <Icon />,
+    disabled: !templateRoute || !canCreateTemplateTask,
     href:
-      viewTechdocLink &&
-      viewTechdocLink({
-        namespace: entity.metadata.namespace || ENTITY_DEFAULT_NAMESPACE,
-        kind: entity.kind,
-        name: entity.metadata.name,
+      templateRoute &&
+      templateRoute({
+        templateName: entity.metadata.name,
+        namespace: entity.metadata.namespace || DEFAULT_NAMESPACE,
       }),
   };
-  const viewApi: IconLinkVerticalProps = {
-    title: hasApis ? '' : 'No APIs available',
-    label: 'View API',
-    disabled: !hasApis,
-    icon: <ExtensionIcon />,
-    href: 'api',
-  };
+}
 
-  let cardClass = '';
-  if (variant === 'gridItem') {
-    cardClass = classes.gridItemCard;
-  } else if (variant === 'fullHeight') {
-    cardClass = classes.fullHeightCard;
+function DefaultAboutCardSubheader() {
+  const { entity } = useEntity();
+  const catalogSourceIconLink = useCatalogSourceIconLinkProps();
+  const techdocsreaderIconLink = useTechdocsReaderIconLinkProps();
+  const scaffolderTemplateIconLink = useScaffolderTemplateIconLinkProps();
+
+  const links = [catalogSourceIconLink, techdocsreaderIconLink];
+  if (isTemplateEntityV1beta3(entity)) {
+    links.push(scaffolderTemplateIconLink);
   }
 
-  let cardContentClass = '';
-  if (variant === 'gridItem') {
-    cardContentClass = classes.gridItemCardContent;
-  } else if (variant === 'fullHeight') {
-    cardContentClass = classes.fullHeightCardContent;
-  }
+  return <HeaderIconLinkRow links={links} />;
+}
 
-  const isUrl =
-    entity.metadata.annotations?.[LOCATION_ANNOTATION]?.startsWith('url:');
+export interface InternalAboutCardProps {
+  /** Icon link row rendered at the top of the card body. */
+  iconLinks?: JSX.Element;
+}
+
+export function InternalAboutCard(props: InternalAboutCardProps) {
+  const { iconLinks } = props;
+  const classes = useStyles();
+  const { entity } = useEntity();
+  const catalogApi = useApi(catalogApiRef);
+  const alertApi = useApi(alertApiRef);
+  const errorApi = useApi(errorApiRef);
+  const templateRoute = useRouteRef(createFromTemplateRouteRef);
+  const sourceTemplateRef = useSourceTemplateCompoundEntityRef(entity);
+  const { allowed: canRefresh } = useEntityPermission(
+    catalogEntityRefreshPermission,
+  );
+  const { t } = useTranslationRef(catalogTranslationRef);
+
+  const entityMetadataEditUrl =
+    entity.metadata.annotations?.[ANNOTATION_EDIT_URL];
+
+  const entityLocation = entity.metadata.annotations?.[ANNOTATION_LOCATION];
+  // Limiting the ability to manually refresh to the less expensive locations
+  const allowRefresh =
+    entityLocation?.startsWith('url:') || entityLocation?.startsWith('file:');
   const refreshEntity = useCallback(async () => {
-    await catalogApi.refreshEntity(stringifyEntityRef(entity));
-    alertApi.post({ message: 'Refresh scheduled', severity: 'info' });
-  }, [catalogApi, alertApi, entity]);
+    try {
+      await catalogApi.refreshEntity(stringifyEntityRef(entity));
+      alertApi.post({
+        message: t('aboutCard.refreshScheduledMessage'),
+        severity: 'info',
+        display: 'transient',
+      });
+    } catch (e) {
+      errorApi.post(e);
+    }
+  }, [catalogApi, entity, alertApi, t, errorApi]);
 
   return (
-    <Card className={cardClass}>
-      <CardHeader
-        title="About"
-        action={
-          <>
-            {isUrl && (
-              <IconButton
-                aria-label="Refresh"
-                title="Schedule entity refresh"
-                onClick={refreshEntity}
-              >
-                <CachedIcon />
-              </IconButton>
-            )}
+    <EntityInfoCard
+      title={t('aboutCard.title')}
+      headerActions={
+        <>
+          {allowRefresh && canRefresh && (
+            <IconButton
+              aria-label={t('aboutCard.refreshButtonAriaLabel')}
+              title={t('aboutCard.refreshButtonTitle')}
+              onClick={refreshEntity}
+            >
+              <CachedIcon />
+            </IconButton>
+          )}
+          <IconButton
+            component={Link}
+            aria-label={t('aboutCard.editButtonAriaLabel')}
+            disabled={!entityMetadataEditUrl}
+            title={t('aboutCard.editButtonTitle')}
+            to={entityMetadataEditUrl ?? '#'}
+          >
+            <EditIcon />
+          </IconButton>
+          {sourceTemplateRef && templateRoute && (
             <IconButton
               component={Link}
-              aria-label="Edit"
-              disabled={!entityMetadataEditUrl}
-              title="Edit Metadata"
-              to={entityMetadataEditUrl ?? '#'}
+              title={t('aboutCard.createSimilarButtonTitle')}
+              to={templateRoute({
+                namespace: sourceTemplateRef.namespace,
+                templateName: sourceTemplateRef.name,
+              })}
             >
-              <EditIcon />
+              <AppIcon id="scaffolder" />
             </IconButton>
-          </>
-        }
-        subheader={
-          <HeaderIconLinkRow links={[viewInSource, viewInTechDocs, viewApi]} />
-        }
-      />
-      <Divider />
-      <CardContent className={cardContentClass}>
-        <AboutContent entity={entity} />
-      </CardContent>
-    </Card>
+          )}
+        </>
+      }
+    >
+      <div className={classes.linkContainer}>
+        {iconLinks ?? <DefaultAboutCardSubheader />}
+      </div>
+      <AboutContent entity={entity} />
+    </EntityInfoCard>
   );
+}
+
+/**
+ * Exported publicly via the EntityAboutCard
+ *
+ * NOTE: We generally do not accept pull requests to extend this class with props
+ * and customizability. If you need to tweak it, consider making a bespoke card
+ * in your own repository instead, that is perfect for your own needs.
+ */
+export function AboutCard() {
+  return <InternalAboutCard />;
 }

@@ -14,67 +14,70 @@
  * limitations under the License.
  */
 
-import { CatalogClient } from '@backstage/catalog-client';
-import {
-  ApiProvider,
-  ApiRegistry,
-  ConfigReader,
-} from '@backstage/core-app-api';
+import { ApiProvider, ConfigReader } from '@backstage/core-app-api';
 import { configApiRef } from '@backstage/core-plugin-api';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
-import { renderInTestApp } from '@backstage/test-utils';
-import React from 'react';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
+import { renderInTestApp, TestApiRegistry } from '@backstage/test-utils';
+import { screen } from '@testing-library/react';
 import { catalogImportApiRef, CatalogImportClient } from '../../api';
-import { DefaultImportPage } from './DefaultImportPage';
+import { DefaultImportPage, ImportPageContent } from './DefaultImportPage';
 
 describe('<DefaultImportPage />', () => {
-  const identityApi = {
-    getUserId: () => {
-      return 'user';
-    },
-    getProfile: () => {
-      return {};
-    },
-    getIdToken: () => {
-      return Promise.resolve('token');
-    },
-    signOut: () => {
-      return Promise.resolve();
-    },
+  const fetchApi = {
+    fetch: jest.fn(),
   };
 
-  let apis: ApiRegistry;
+  let apis: TestApiRegistry;
 
   beforeEach(() => {
-    apis = ApiRegistry.with(
-      configApiRef,
-      new ConfigReader({ integrations: {} }),
-    )
-      .with(catalogApiRef, new CatalogClient({ discoveryApi: {} as any }))
-      .with(
+    apis = TestApiRegistry.from(
+      [configApiRef, new ConfigReader({ integrations: {} })],
+      [catalogApiRef, catalogApiMock()],
+      [
         catalogImportApiRef,
         new CatalogImportClient({
           discoveryApi: {} as any,
           scmAuthApi: {
             getCredentials: async () => ({ token: 'token', headers: {} }),
           },
-          identityApi,
+          fetchApi,
           scmIntegrationsApi: {} as any,
           catalogApi: {} as any,
           configApi: {} as any,
         }),
-      );
+      ],
+    );
   });
 
   it('renders without exploding', async () => {
-    const { getByText } = await renderInTestApp(
+    await renderInTestApp(
       <ApiProvider apis={apis}>
         <DefaultImportPage />
       </ApiProvider>,
     );
 
     expect(
-      getByText('Start tracking your component in Backstage'),
+      screen.getByText('Start tracking your component in Backstage'),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: 'Register an existing component',
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the content without the legacy header', async () => {
+    await renderInTestApp(
+      <ApiProvider apis={apis}>
+        <ImportPageContent />
+      </ApiProvider>,
+    );
+
+    expect(
+      screen.getByText('Start tracking your component in Backstage'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 });

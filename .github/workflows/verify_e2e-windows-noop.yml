@@ -1,0 +1,31 @@
+# NO-OP placeholder that always passes for other paths
+# This is here so that we're able to set the status check as required
+
+name: E2E Windows Void
+on:
+  pull_request:
+    paths-ignore:
+      - 'yarn.lock'
+      - '.github/workflows/verify_e2e-windows.yml'
+      - 'packages/cli/**'
+      - 'packages/e2e-test/**'
+      - 'packages/create-app/**'
+
+permissions: {}
+
+jobs:
+  noop:
+    runs-on: windows-2025
+
+    strategy:
+      matrix:
+        node-version: [24.x, 26.x]
+
+    name: E2E Windows ${{ matrix.node-version }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - run: echo NOOP

@@ -31,15 +31,17 @@ describe('readGitLabIntegrationConfig', () => {
     data: Partial<GitLabIntegrationConfig>,
   ): Promise<Config> {
     const fullSchema = await loadConfigSchema({
-      dependencies: [require('../../package.json').name],
+      dependencies: ['@backstage/integration'],
     });
     const serializedSchema = fullSchema.serialize() as {
-      schemas: { path: string }[];
+      schemas: { value: { properties?: { integrations?: object } } }[];
     };
     const schema = await loadConfigSchema({
       serialized: {
-        ...serializedSchema, // grab the schema from this package only
-        schemas: serializedSchema.schemas.filter(s => s.path === 'config.d.ts'),
+        ...serializedSchema, // only include schemas that apply to integrations
+        schemas: serializedSchema.schemas.filter(
+          s => s.value?.properties?.integrations,
+        ),
       },
     });
     const processed = schema.process(
@@ -53,9 +55,14 @@ describe('readGitLabIntegrationConfig', () => {
     const output = readGitLabIntegrationConfig(
       buildConfig({
         host: 'a.com',
-        token: 't',
+        token: ' t\n',
         apiBaseUrl: 'https://a.com',
         baseUrl: 'https://baseurl.for.me/gitlab',
+        retry: {
+          maxRetries: 3,
+          maxApiRequestsPerMinute: 1000,
+          retryStatusCodes: [429],
+        },
       }),
     );
 
@@ -64,6 +71,12 @@ describe('readGitLabIntegrationConfig', () => {
       token: 't',
       apiBaseUrl: 'https://a.com',
       baseUrl: 'https://baseurl.for.me/gitlab',
+      commitSigningKey: undefined,
+      retry: {
+        maxRetries: 3,
+        maxApiRequestsPerMinute: 1000,
+        retryStatusCodes: [429],
+      },
     });
   });
 
@@ -75,6 +88,8 @@ describe('readGitLabIntegrationConfig', () => {
       host: 'gitlab.com',
       apiBaseUrl: 'https://gitlab.com/api/v4',
       baseUrl: 'https://gitlab.com',
+      commitSigningKey: undefined,
+      retry: undefined,
     });
   });
 
@@ -87,6 +102,7 @@ describe('readGitLabIntegrationConfig', () => {
       host: 'gitlab.com',
       baseUrl: 'https://gitlab.com',
       apiBaseUrl: 'https://gitlab.com/api/v4',
+      retry: undefined,
     });
   });
 
@@ -117,6 +133,9 @@ describe('readGitLabIntegrationConfig', () => {
       host: 'a.com',
       apiBaseUrl: 'https://a.com/api',
       baseUrl: 'https://a.com',
+      token: undefined, // token is filtered out on frontend
+      commitSigningKey: undefined,
+      retry: undefined,
     });
   });
 });
@@ -142,6 +161,7 @@ describe('readGitLabIntegrationConfigs', () => {
       token: 't',
       apiBaseUrl: 'https://a.com/api/v4',
       baseUrl: 'https://a.com',
+      retry: undefined,
     });
   });
 

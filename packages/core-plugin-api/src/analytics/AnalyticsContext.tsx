@@ -18,27 +18,31 @@ import {
   createVersionedContext,
   createVersionedValueMap,
 } from '@backstage/version-bridge';
-import React, { ReactNode, useContext } from 'react';
+import { ComponentType, ReactNode, useContext, useMemo } from 'react';
 import { AnalyticsContextValue } from './types';
 
-const AnalyticsReactContext =
-  createVersionedContext<{ 1: AnalyticsContextValue }>('analytics-context');
+const AnalyticsReactContext = createVersionedContext<{
+  1: AnalyticsContextValue;
+}>('analytics-context');
+
+const defaultAnalyticsContext: AnalyticsContextValue = Object.freeze({
+  routeRef: 'unknown',
+  pluginId: 'root',
+  extension: 'App',
+});
 
 /**
  * A "private" (to this package) hook that enables context inheritance and a
  * way to read Analytics Context values at event capture-time.
- * @private
+ *
+ * @internal
  */
 export const useAnalyticsContext = (): AnalyticsContextValue => {
   const theContext = useContext(AnalyticsReactContext);
 
   // Provide a default value if no value exists.
   if (theContext === undefined) {
-    return {
-      routeRef: 'unknown',
-      pluginId: 'root',
-      extension: 'App',
-    };
+    return defaultAnalyticsContext;
   }
 
   // This should probably never happen, but check for it.
@@ -54,23 +58,28 @@ export const useAnalyticsContext = (): AnalyticsContextValue => {
  * Provides components in the child react tree an Analytics Context, ensuring
  * all analytics events captured within the context have relevant attributes.
  *
+ * @remarks
+ *
  * Analytics contexts are additive, meaning the context ultimately emitted with
  * an event is the combination of all contexts in the parent tree.
+ *
+ * @public
  */
-export const AnalyticsContext = ({
-  attributes,
-  children,
-}: {
+export const AnalyticsContext = (options: {
   attributes: Partial<AnalyticsContextValue>;
   children: ReactNode;
 }) => {
-  const parentValues = useAnalyticsContext();
-  const combinedValue = {
-    ...parentValues,
-    ...attributes,
-  };
+  const { attributes, children } = options;
 
-  const versionedCombinedValue = createVersionedValueMap({ 1: combinedValue });
+  const parentValues = useAnalyticsContext();
+  // The versioned value is memoized so that context consumers don't get
+  // rerendered when this provider rerenders without the attributes having
+  // changed. Note that this requires callers to pass a stable attributes
+  // object for the memoization to be effective.
+  const versionedCombinedValue = useMemo(
+    () => createVersionedValueMap({ 1: { ...parentValues, ...attributes } }),
+    [parentValues, attributes],
+  );
   return (
     <AnalyticsReactContext.Provider value={versionedCombinedValue}>
       {children}
@@ -84,12 +93,13 @@ export const AnalyticsContext = ({
  *
  * @param Component - Component to be wrapped with analytics context attributes
  * @param values - Analytics context key/value pairs.
+ * @internal
  */
-export function withAnalyticsContext<P>(
-  Component: React.ComponentType<P>,
+export function withAnalyticsContext<TProps extends {}>(
+  Component: ComponentType<TProps>,
   values: AnalyticsContextValue,
 ) {
-  const ComponentWithAnalyticsContext = (props: P) => {
+  const ComponentWithAnalyticsContext = (props: TProps) => {
     return (
       <AnalyticsContext attributes={values}>
         <Component {...props} />

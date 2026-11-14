@@ -14,16 +14,13 @@
  * limitations under the License.
  */
 
-import { makeStyles } from '@material-ui/core';
-import ReactMarkdown from 'react-markdown';
-import gfm from 'remark-gfm';
-import React from 'react';
-import { BackstageTheme } from '@backstage/theme';
-import { CodeSnippet } from '../CodeSnippet';
+import { makeStyles } from '@material-ui/core/styles';
+import type { Options } from 'react-markdown';
+import { lazy, Suspense } from 'react';
 
 export type MarkdownContentClassKey = 'markdown';
 
-const useStyles = makeStyles<BackstageTheme>(
+const useStyles = makeStyles(
   theme => ({
     markdown: {
       '& table': {
@@ -64,32 +61,36 @@ const useStyles = makeStyles<BackstageTheme>(
   { name: 'BackstageMarkdownContent' },
 );
 
-type Props = {
+export type Props = {
   content: string;
   dialect?: 'gfm' | 'common-mark';
+  linkTarget?: Options['linkTarget'];
+  transformLinkUri?: (href: string) => string;
+  transformImageUri?: (href: string) => string;
+  className?: string;
 };
 
-const renderers = {
-  code: ({ language, value }: { language: string; value?: string }) => {
-    return <CodeSnippet language={language} text={value ?? ''} />;
-  },
-};
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'));
 
 /**
- * MarkdownContent
- * --
- * Renders markdown with the default dialect [gfm - GitHub flavored Markdown](https://github.github.com/gfm/) to backstage theme styled HTML.
- * If you just want to render to plain [CommonMark](https://commonmark.org/), set the dialect to `'common-mark'`
+ * Renders markdown with the default dialect {@link https://github.github.com/gfm/ | gfm - GitHub flavored Markdown} to backstage theme styled HTML.
+ *
+ * @remarks
+ * If you just want to render to plain {@link https://commonmark.org/ | CommonMark}, set the dialect to `'common-mark'`
+ *
+ * The markdown renderer loads the first time this component renders, so the
+ * first render shows nothing until it has loaded. Tests that render this
+ * component synchronously should await the content, for example with
+ * `findBy*` queries.
  */
 export function MarkdownContent(props: Props) {
-  const { content, dialect = 'gfm' } = props;
   const classes = useStyles();
   return (
-    <ReactMarkdown
-      plugins={dialect === 'gfm' ? [gfm] : []}
-      className={classes.markdown}
-      children={content}
-      renderers={renderers}
-    />
+    <Suspense fallback={null}>
+      <MarkdownRenderer
+        {...props}
+        className={`${classes.markdown} ${props.className ?? ''}`.trim()}
+      />
+    </Suspense>
   );
 }

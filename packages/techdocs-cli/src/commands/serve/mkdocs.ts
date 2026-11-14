@@ -1,0 +1,117 @@
+/*
+ * Copyright 2020 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { OptionValues } from 'commander';
+import openBrowser from 'react-dev-utils/openBrowser';
+import { createLogger } from '../../lib/utility';
+import { runEngineServer } from '../../lib/server';
+import { RunOnOutput } from '@backstage/cli-common';
+import { getMkdocsYml } from '@backstage/plugin-techdocs-node';
+import fs from 'fs-extra';
+import { checkIfDockerIsOperational } from './utils';
+import { getEngineConfig } from '../../lib/engines';
+import { resolveEngine } from '../../lib/catalogEntity';
+import { prepareServeConfig } from '../../lib/prepareServeConfig';
+
+export default async function serveMkdocs(opts: OptionValues) {
+  const logger = createLogger({ verbose: opts.verbose });
+  if (opts.deprecatedCommandAlias) {
+    logger.warn(
+      `${opts.deprecatedCommandAlias} is deprecated and will be removed in a future release. Use serve:raw instead.`,
+    );
+  }
+
+  const { engine, source: engineSource } = await resolveEngine(
+    process.cwd(),
+    opts.engine,
+    logger,
+  );
+  const engineConfig = getEngineConfig(engine, engineSource);
+
+  const localAddr = `http://127.0.0.1:${opts.port}`;
+
+  if (opts.docker) {
+    const isDockerOperational = await checkIfDockerIsOperational(logger);
+    if (!isDockerOperational) {
+      return;
+    }
+  }
+
+  const { path: mkdocsYmlPath, configIsTemporary } = await getMkdocsYml(
+    './',
+    opts.siteName,
+  );
+
+  const serveConfigPath = await prepareServeConfig(
+    engineConfig,
+    mkdocsYmlPath,
+    logger,
+  );
+
+  // We want to open browser only once based on a log.
+  let boolOpenBrowserTriggered = false;
+
+  const logFunc: RunOnOutput = data => {
+    // Sometimes the lines contain an unnecessary extra new line in between
+    const logLines = data.toString().split('\n');
+    const logPrefix = opts.docker ? `[docker/${engine}]` : `[${engine}]`;
+    logLines.forEach(line => {
+      if (line === '') {
+        return;
+      }
+
+      // Logs from container is verbose.
+      logger.verbose(`${logPrefix} ${line}`);
+
+      // When the server has started, open a new browser tab for the user.
+      if (
+        !boolOpenBrowserTriggered &&
+        engineConfig.startupLogPattern.test(line)
+      ) {
+        // Always open the local address, since 0.0.0.0 belongs to docker
+        logger.info(`\nStarting ${engine} server on ${localAddr}\n`);
+        openBrowser(localAddr);
+        boolOpenBrowserTriggered = true;
+      }
+    });
+  };
+  // Engines may log to stderr rather than stdout (mkdocs does, see
+  // https://github.com/mkdocs/mkdocs/issues/879), so watch both streams.
+
+  const childProcess = runEngineServer({
+    port: opts.port,
+    dockerImage: opts.dockerImage ?? engineConfig.defaultImage,
+    dockerEntrypoint: opts.dockerEntrypoint,
+    dockerOptions: opts.dockerOption,
+    useDocker: opts.docker,
+    onStdout: logFunc,
+    onStderr: logFunc,
+    engineBinary: engineConfig.binary,
+    engineServeArgs: engineConfig.serveArgs(opts.port, {
+      configFile: serveConfigPath,
+      useDocker: opts.docker,
+    }),
+  });
+
+  // Keep waiting for user to cancel the process
+  await childProcess.waitForExit();
+
+  if (configIsTemporary) {
+    process.on('exit', async () => {
+      fs.rmSync(mkdocsYmlPath, {});
+    });
+  }
+}

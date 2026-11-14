@@ -15,12 +15,8 @@
  */
 
 import { useAnalyticsContext } from './AnalyticsContext';
-import {
-  analyticsApiRef,
-  AnalyticsTracker,
-  AnalyticsApi,
-  useApi,
-} from '../apis';
+import { analyticsApiRef, AnalyticsTracker, AnalyticsApi } from '../apis';
+import { useApi } from '@backstage/frontend-plugin-api';
 import { useRef } from 'react';
 import { Tracker } from './Tracker';
 
@@ -33,7 +29,9 @@ function useAnalyticsApi(): AnalyticsApi {
 }
 
 /**
- * Get a pre-configured analytics tracker.
+ * Gets a pre-configured analytics tracker.
+ *
+ * @public
  */
 export function useAnalytics(): AnalyticsTracker {
   const trackerRef = useRef<Tracker | null>(null);
@@ -51,6 +49,8 @@ export function useAnalytics(): AnalyticsTracker {
   }
 
   const tracker = getTracker();
+  // this is not ideal, but it allows to memoize the tracker
+  // without explicitly set the context as dependency.
   tracker.setContext(context);
 
   return tracker;

@@ -1,0 +1,216 @@
+/*
+ * Copyright 2025 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  type AppError,
+  prepareSpecializedApp,
+} from '@backstage/frontend-app-api';
+import {
+  coreExtensionData,
+  ExtensionDefinition,
+  FrontendFeature,
+  RouteRef,
+  ExternalRouteRef,
+  identityApiRef,
+} from '@backstage/frontend-plugin-api';
+import { render } from '@testing-library/react';
+import { JsonObject } from '@backstage/types';
+import { ConfigReader } from '@backstage/config';
+import { createTestAppPlugin } from './testAppPlugin';
+// eslint-disable-next-line @backstage/no-relative-monorepo-imports
+import type { CreateSpecializedAppInternalOptions } from '../../../frontend-app-api/src/wiring/prepareSpecializedApp';
+// eslint-disable-next-line @backstage/no-relative-monorepo-imports
+import { getBasePath } from '../../../frontend-app-api/src/routing/getBasePath';
+import { TestApiPairs } from '../apis/TestApiProvider';
+import { throwOnAppErrors } from './throwOnAppErrors';
+import {
+  createTestNavigation,
+  type TestAppRenderResult,
+} from './createTestNavigation';
+import { prepareTestAppFeatures } from './prepareTestAppFeatures';
+
+export type { TestAppRenderResult };
+
+const DEFAULT_MOCK_CONFIG = {
+  app: { baseUrl: 'http://localhost:3000' },
+  backend: { baseUrl: 'http://localhost:7007' },
+};
+
+/**
+ * Options for `renderTestApp`.
+ *
+ * @public
+ */
+export type RenderTestAppOptions<TApiPairs extends any[] = any[]> = {
+  /**
+   * Additional configuration passed to the app when rendering elements inside it.
+   */
+  config?: JsonObject;
+  /**
+   * Additional extensions to add to the test app.
+   */
+  extensions?: ExtensionDefinition<any>[];
+
+  /**
+   * Additional features to add to the test app.
+   */
+  features?: FrontendFeature[];
+
+  /**
+   * Initial route entries for the in-memory app history.
+   * The last entry is the starting location.
+   */
+  initialRouteEntries?: string[];
+
+  /**
+   * An object of paths to mount route refs on, with the key being the path and
+   * the value being the route ref that the path will be bound to. This allows
+   * the route refs to be used by `useRouteRef` in the rendered elements.
+   *
+   * @example
+   * ```ts
+   * renderTestApp({
+   *   mountedRoutes: {
+   *     '/my-path': myRouteRef,
+   *   },
+   *   extensions: [...],
+   * })
+   * ```
+   */
+  mountedRoutes?: { [path: string]: RouteRef | ExternalRouteRef };
+
+  /**
+   * API overrides to provide to the test app. In-memory fakes are provided by
+   * default for alerts, errors, OAuth requests, storage, and toasts.
+   * Explicit overrides take precedence. Use `mockApis` helpers
+   * from `@backstage/frontend-test-utils` to create mock implementations.
+   *
+   * @example
+   * ```ts
+   * import { mockApis } from '@backstage/frontend-test-utils';
+   *
+   * renderTestApp({
+   *   apis: [mockApis.identity({ userEntityRef: 'user:default/guest' })],
+   *   extensions: [...],
+   * })
+   * ```
+   */
+  apis?: readonly [...TestApiPairs<TApiPairs>];
+
+  /**
+   * Decides whether an error reported while creating the test app is
+   * expected. By default every app error fails the test.
+   *
+   * @example
+   * ```ts
+   * isExpectedError: error =>
+   *   error.code === 'EXTENSION_INPUT_DATA_IGNORED' &&
+   *   error.context.node.spec.id === 'page:my-plugin'
+   * ```
+   */
+  isExpectedError?: (error: AppError) => boolean;
+};
+
+const testAppPlugin = createTestAppPlugin();
+
+/**
+ * Renders the provided extensions inside a Backstage app, returning the same
+ * utilities as `@testing-library/react` `render` function.
+ *
+ * Navigation is owned by a {@link @backstage/frontend-plugin-api#AppHistoryApi}
+ * with in-memory history, the same seam as production, and is returned as
+ * `appHistory`.
+ *
+ * There is no `router` option here, and no need for one: the extensions are
+ * routed by the app itself, so each page declares the adapter it wants exactly
+ * as it does in production. The app's root React Router v6 projection is also
+ * present. `renderInTestApp` supplies the page around a bare element.
+ *
+ * @public
+ */
+export function renderTestApp<const TApiPairs extends any[] = any[]>(
+  options?: RenderTestAppOptions<TApiPairs>,
+): TestAppRenderResult {
+  const extensions = [...(options?.extensions ?? [])];
+  const configData = options?.config ?? DEFAULT_MOCK_CONFIG;
+  const defaultAppHistory = createTestNavigation({
+    initialEntries: options?.initialRouteEntries,
+    config: configData,
+  });
+
+  const { appHistory, features, apiFactoryOverrides, externalBindings } =
+    prepareTestAppFeatures({
+      extensions,
+      appHistory: defaultAppHistory,
+      appPluginOverride: testAppPlugin,
+      mountedRoutes: options?.mountedRoutes,
+      features: options?.features,
+      apis: options?.apis,
+      mountedRouteAttachTo: { id: 'app/routes', input: 'routes' },
+    });
+
+  const identityOverrideFactory = apiFactoryOverrides.find(
+    factory => factory.api.id === identityApiRef.id,
+  );
+
+  const config = ConfigReader.fromConfigs([
+    {
+      context: 'render-config',
+      data: configData,
+    },
+  ]);
+
+  const app = prepareSpecializedApp({
+    features,
+    config,
+    __internal: {
+      apiFactoryOverrides: apiFactoryOverrides.filter(
+        factory => factory.api.id !== identityApiRef.id,
+      ),
+    },
+    bindRoutes:
+      externalBindings.size > 0
+        ? ({ bind }) => {
+            for (const [externalRef, targetRef] of externalBindings) {
+              bind({ ref: externalRef }, { ref: targetRef });
+            }
+          }
+        : undefined,
+  } as CreateSpecializedAppInternalOptions).finalize();
+
+  throwOnAppErrors(app.errors, {
+    description: 'Failed to create the test app',
+    isExpectedError: options?.isExpectedError,
+  });
+
+  if (identityOverrideFactory) {
+    // identityApiRef always resolves to the app's internal AppIdentityProxy
+    // (AppRouter requires this), so the override can't replace the factory.
+    // setTarget is now idempotent (first write wins), so we just need to
+    // set it before AppRouter's own guest-identity fallback does, which
+    // happens during this same synchronous render call.
+    const proxy = app.apis.get(identityApiRef as any) as any;
+    proxy?.setTarget?.(identityOverrideFactory.factory({}), {
+      signOutTargetUrl: getBasePath(config) || '/',
+    });
+  }
+
+  const result = render(
+    app.tree.root.instance!.getData(coreExtensionData.reactElement),
+  );
+
+  return Object.assign(result, { appHistory });
+}

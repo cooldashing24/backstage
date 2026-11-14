@@ -14,14 +14,19 @@
  * limitations under the License.
  */
 
-import { BackstageTheme } from '@backstage/theme';
-import { Button, IconButton, useMediaQuery } from '@material-ui/core';
-import React from 'react';
+import Button from '@material-ui/core/Button';
+import IconButton from '@material-ui/core/IconButton';
+import useMediaQuery from '@material-ui/core/useMediaQuery';
 import { Link as RouterLink, LinkProps } from 'react-router-dom';
 import AddCircleOutline from '@material-ui/icons/AddCircleOutline';
+import { Theme } from '@material-ui/core/styles';
 
 /**
  * Properties for {@link CreateButton}
+ *
+ * @public
+ * @deprecated Use the replacement described in {@link CreateButton} instead.
+ * BUI components use their own props and styling contracts.
  */
 export type CreateButtonProps = {
   title: string;
@@ -29,10 +34,15 @@ export type CreateButtonProps = {
 
 /**
  * Responsive Button giving consistent UX for creation of different things
+ *
+ * @public
+ * @deprecated Use `ButtonLink` from `@backstage/ui` with an `href` instead.
+ * Compose responsive icon-only and text presentations if needed, preserving
+ * an accessible label, and omit the link when there is no destination.
  */
 export function CreateButton(props: CreateButtonProps) {
   const { title, to } = props;
-  const isXSScreen = useMediaQuery<BackstageTheme>(theme =>
+  const isXSScreen = useMediaQuery<Theme>(theme =>
     theme.breakpoints.down('xs'),
   );
 

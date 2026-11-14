@@ -1,0 +1,1483 @@
+/*
+ * Copyright 2022 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+import { renderInTestApp } from '@backstage/test-utils';
+import { JsonObject, JsonValue } from '@backstage/types';
+import type { RJSFValidationError } from '@rjsf/utils';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
+
+import { FieldExtensionComponentProps } from '../../../extensions';
+import { LayoutTemplate } from '../../../layouts';
+import { SecretsContextProvider } from '../../../secrets';
+import { TemplateParameterSchema } from '../../../types';
+import { Stepper } from './Stepper';
+
+describe('Stepper', () => {
+  it('should render the step titles for each step of the manifest', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        { title: 'Step 1', schema: { properties: {} } },
+        { title: 'Step 2', schema: { properties: {} } },
+      ],
+      title: 'React JSON Schema Form Test',
+    };
+
+    const { getByText } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    for (const step of manifest.steps) {
+      expect(getByText(step.title)).toBeInTheDocument();
+    }
+  });
+
+  it('should render next / review button', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        { title: 'Step 1', schema: { properties: {} } },
+        { title: 'Step 2', schema: { properties: {} } },
+      ],
+      title: 'React JSON Schema Form Test',
+    };
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    expect(getByRole('button', { name: 'Next' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    expect(getByRole('button', { name: 'Review' })).toBeInTheDocument();
+  });
+
+  it('should remember the state of the form when cycling through the pages', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+              },
+            },
+          },
+        },
+        {
+          title: 'Step 2',
+          schema: {
+            properties: {
+              description: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      ],
+      title: 'React JSON Schema Form Test',
+    };
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'name' }), {
+        target: { value: 'im a test value' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Back' }));
+    });
+
+    expect(getByRole('textbox', { name: 'name' })).toHaveValue(
+      'im a test value',
+    );
+  });
+
+  it('should remember the state of the form when cycling through the pages by directly clicking on the step labels', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+              },
+            },
+          },
+        },
+        {
+          title: 'Step 2',
+          schema: {
+            properties: {
+              description: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      ],
+      title: 'React JSON Schema Form Test',
+    };
+
+    const { getByRole, getByLabelText } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'name' }), {
+        target: { value: 'im a test value' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByLabelText('Step 1'));
+    });
+
+    expect(getByRole('textbox', { name: 'name' })).toHaveValue(
+      'im a test value',
+    );
+  });
+
+  // This test is currently broken, and needs rethinking how we fix this.
+  // eslint-disable-next-line jest/no-disabled-tests
+  it.skip('should omit properties that are no longer pertinent to the current step', async () => {
+    const manifest: TemplateParameterSchema = {
+      title: 'Conditional Input Form',
+      steps: [
+        {
+          title: 'Conditional Input step',
+          schema: {
+            type: 'object',
+            properties: {
+              moreInfo: {
+                type: 'boolean',
+                title: 'More info',
+              },
+            },
+            dependencies: {
+              moreInfo: {
+                oneOf: [
+                  {
+                    properties: {
+                      moreInfo: {
+                        const: true,
+                      },
+                      description: {
+                        type: 'string',
+                        title: 'Description',
+                      },
+                    },
+                    required: ['description'],
+                  },
+                  {
+                    properties: {
+                      moreInfo: {
+                        not: {
+                          const: true,
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const onCreate = jest.fn();
+
+    const { getByRole, queryByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          onCreate={onCreate}
+          extensions={[]}
+          formProps={{ omitExtraData: true, liveOmit: true }}
+        />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(getByRole('checkbox', { name: 'More info' }));
+      fireEvent.change(getByRole('textbox', { name: 'Description' }), {
+        target: { value: 'My Test Description' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    expect(
+      getByRole('cell', { name: 'My Test Description' }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Back' }));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole('checkbox', { name: 'More info' }));
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    expect(
+      queryByRole('cell', { name: 'My Test Description' }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Create' }));
+    });
+
+    expect(onCreate).toHaveBeenCalledWith({ moreInfo: false });
+  });
+
+  it('should merge and overwrite nested formData correctly', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              foo: {
+                type: 'string',
+                title: 'Foo - 1',
+              },
+            },
+          },
+        },
+        {
+          title: 'Step 2',
+          schema: {
+            properties: {
+              foo: {
+                type: 'string',
+                title: 'Foo - 2',
+              },
+              bar: {
+                type: 'string',
+                title: 'Bar - 2',
+              },
+            },
+          },
+        },
+      ],
+      title: 'React JSON Schema Form Test',
+    };
+
+    const onCreate = jest.fn();
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} onCreate={onCreate} extensions={[]} />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'Foo - 1' }), {
+        target: { value: 'value 1' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'Foo - 2' }), {
+        target: { value: 'value 2' },
+      });
+      fireEvent.change(getByRole('textbox', { name: 'Bar - 2' }), {
+        target: { value: 'value 2' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Create' }));
+    });
+
+    expect(onCreate).toHaveBeenCalledWith({
+      foo: 'value 2',
+      bar: 'value 2',
+    });
+  });
+
+  it('should render custom field extensions properly', async () => {
+    const MockComponent = () => {
+      return <h1>im a custom field extension</h1>;
+    };
+
+    const manifest: TemplateParameterSchema = {
+      title: 'Custom Fields',
+      steps: [
+        {
+          title: 'Test',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+                'ui:field': 'Mock',
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const { getByText } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          extensions={[{ name: 'Mock', component: MockComponent }]}
+          onCreate={jest.fn()}
+        />
+      </SecretsContextProvider>,
+    );
+
+    expect(getByText('im a custom field extension')).toBeInTheDocument();
+  });
+
+  it('should disable the form with progress when async validators are running', async () => {
+    const MockComponent = () => {
+      return <h1>im a custom field extension</h1>;
+    };
+
+    const manifest: TemplateParameterSchema = {
+      title: 'Custom Fields',
+      steps: [
+        {
+          title: 'Test',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+                'ui:field': 'Mock',
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          extensions={[
+            {
+              name: 'Mock',
+              component: MockComponent,
+              validation: async () => new Promise(r => setTimeout(r, 1000)),
+            },
+          ]}
+          onCreate={jest.fn()}
+        />
+      </SecretsContextProvider>,
+    );
+    fireEvent.click(getByRole('button', { name: 'Review' }));
+    await waitFor(() => {
+      expect(getByRole('progressbar')).toBeInTheDocument(); // Check if progress bar is rendered
+      expect(getByRole('button', { name: 'Review' })).toBeDisabled(); // Check if the button is disabled
+    });
+  });
+
+  it('should transform default error message', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              postcode: {
+                type: 'string',
+                pattern: '[A-Z][0-9][A-Z] [0-9][A-Z][0-9]',
+              },
+            },
+          },
+        },
+      ],
+      title: 'transformErrors Form Test',
+    };
+
+    const transformErrors = (errors: RJSFValidationError[]) => {
+      return errors.map(err =>
+        err.property === '.postcode'
+          ? { ...err, message: 'invalid postcode' }
+          : err,
+      );
+    };
+
+    const { getByText, getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          extensions={[]}
+          onCreate={jest.fn()}
+          formProps={{ transformErrors }}
+        />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'postcode' }), {
+        target: { value: 'invalid' },
+      });
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    expect(getByText('invalid postcode')).toBeInTheDocument();
+  });
+
+  it('should render ajv-errors message', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              postcode: {
+                type: 'string',
+                pattern: '[A-Z][0-9][A-Z] [0-9][A-Z][0-9]',
+              },
+            },
+            errorMessage: {
+              properties: {
+                postcode: 'invalid postcode',
+              },
+            },
+          },
+        },
+      ],
+      title: 'transformErrors Form Test',
+    };
+
+    const { getByText, getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.change(getByRole('textbox', { name: 'postcode' }), {
+        target: { value: 'invalid' },
+      });
+
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    expect(getByText('invalid postcode')).toBeInTheDocument();
+  });
+
+  it('should grab the initial formData from the query', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              firstName: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      ],
+      title: 'initialize formData',
+    };
+
+    const mockFormData = { firstName: 'John' };
+
+    // Use history.replaceState to set the query string (jsdom 27 doesn't allow redefining window.location)
+    window.history.replaceState(
+      {},
+      '',
+      `?formData=${JSON.stringify(mockFormData)}`,
+    );
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    expect(getByRole('textbox', { name: 'firstName' })).toHaveValue('John');
+  });
+
+  it('should initialize formState with undefined form values', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        {
+          title: 'Step 1',
+          schema: {
+            properties: {
+              firstName: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      ],
+      title: 'initialize formData',
+    };
+
+    const onCreate = jest.fn(async (values: Record<string, JsonValue>) => {
+      expect(values).toHaveProperty('firstName');
+    });
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={onCreate} />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Review' }));
+    });
+
+    expect(getByRole('button', { name: 'Create' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Create' }));
+    });
+
+    // flush promises
+    return new Promise(process.nextTick);
+  });
+
+  it('should override the Create and Review button text', async () => {
+    const manifest: TemplateParameterSchema = {
+      title: 'Custom Fields',
+      steps: [
+        {
+          title: 'Test',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          onCreate={jest.fn()}
+          extensions={[]}
+          components={{
+            createButtonText: <b>Make</b>,
+            reviewButtonText: <i>Inspect</i>,
+          }}
+        />
+      </SecretsContextProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Inspect' }));
+    });
+
+    expect(getByRole('button', { name: 'Make' })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Make' }));
+    });
+  });
+
+  it('should allow overrides to the uiSchema and formContext correctly', async () => {
+    const manifest: TemplateParameterSchema = {
+      title: 'Custom Fields',
+      steps: [
+        {
+          title: 'Test',
+          schema: {
+            properties: {
+              name: {
+                type: 'string',
+                'ui:placeholder': 'Enter your name',
+              },
+              age: {
+                type: 'number',
+                'ui:placeholder': 'Enter your age',
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const uiSchema = {
+      name: {
+        'ui:readonly': true,
+        'ui:placeholder': 'Should be overwritten',
+      },
+    };
+
+    const formContext = {
+      readOnlyAsDisabled: true,
+    };
+
+    const { getByRole } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper
+          manifest={manifest}
+          onCreate={jest.fn()}
+          extensions={[]}
+          formProps={{ uiSchema, formContext }}
+          initialState={{ name: 'Some Name', age: 40 }}
+        />
+      </SecretsContextProvider>,
+    );
+
+    expect(getByRole('textbox', { name: 'name' })).toHaveValue('Some Name');
+    expect(getByRole('textbox', { name: 'name' })).toBeDisabled();
+    expect(getByRole('textbox', { name: 'name' })).toHaveAttribute(
+      'placeholder',
+      'Enter your name',
+    );
+
+    expect(getByRole('spinbutton', { name: 'age' })).toHaveValue(40);
+    expect(getByRole('spinbutton', { name: 'age' })).toBeEnabled();
+    expect(getByRole('spinbutton', { name: 'age' })).toHaveAttribute(
+      'placeholder',
+      'Enter your age',
+    );
+  });
+
+  it('should scroll the window to top on step change when there is no <main> element', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        { title: 'Step 1', schema: { properties: {} } },
+        { title: 'Step 2', schema: { properties: {} } },
+      ],
+      title: 'Scroll Test (no main)',
+    };
+
+    // Apps on the new frontend system render no <main> element. With none
+    // present, the Stepper should fall back to scrolling the window.
+    // (jsdom does not implement window.scrollTo, so we stub it.)
+    const scrollToSpy = jest
+      .spyOn(window, 'scrollTo')
+      .mockImplementation(() => {});
+
+    const { getByRole, unmount } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    scrollToSpy.mockClear();
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+
+    scrollToSpy.mockRestore();
+    unmount();
+  });
+
+  it('should scroll the nearest scrollable ancestor to top when activeStep changes', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        { title: 'Step 1', schema: { properties: {} } },
+        { title: 'Step 2', schema: { properties: {} } },
+      ],
+      title: 'Scroll Test',
+    };
+
+    const windowScrollSpy = jest
+      .spyOn(window, 'scrollTo')
+      .mockImplementation(() => {});
+
+    const { getByRole, container, unmount } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    const scrollableAncestor = container as HTMLElement;
+    const scrollToMock = jest.fn();
+    scrollableAncestor.scrollTo = scrollToMock;
+    scrollableAncestor.style.overflowY = 'auto';
+    Object.defineProperty(scrollableAncestor, 'scrollHeight', {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(scrollableAncestor, 'clientHeight', {
+      configurable: true,
+      value: 500,
+    });
+
+    windowScrollSpy.mockClear();
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    expect(scrollToMock).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+    expect(windowScrollSpy).not.toHaveBeenCalled();
+
+    windowScrollSpy.mockRestore();
+    unmount();
+  });
+
+  it('should scroll the window when a non-scrollable <main> exists', async () => {
+    const manifest: TemplateParameterSchema = {
+      steps: [
+        { title: 'Step 1', schema: { properties: {} } },
+        { title: 'Step 2', schema: { properties: {} } },
+      ],
+      title: 'Scroll Test (non-scrollable main)',
+    };
+
+    const main = document.createElement('main');
+    document.body.appendChild(main);
+    const mainScrollTo = jest.fn();
+    main.scrollTo = mainScrollTo;
+
+    const windowScrollSpy = jest
+      .spyOn(window, 'scrollTo')
+      .mockImplementation(() => {});
+
+    const { getByRole, unmount } = await renderInTestApp(
+      <SecretsContextProvider>
+        <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+      </SecretsContextProvider>,
+    );
+
+    // Ignore the initial mount effect call; only measure the step change.
+    windowScrollSpy.mockClear();
+
+    await act(async () => {
+      fireEvent.click(getByRole('button', { name: 'Next' }));
+    });
+
+    expect(mainScrollTo).not.toHaveBeenCalled();
+    expect(windowScrollSpy).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+
+    windowScrollSpy.mockRestore();
+    document.body.removeChild(main);
+    unmount();
+  });
+
+  describe('Scaffolder Layouts', () => {
+    it('should render the step in the scaffolder layout', async () => {
+      const ScaffolderLayout: LayoutTemplate = ({ properties }) => (
+        <>
+          <h1>A Scaffolder Layout</h1>
+          {properties.map((prop, i) => (
+            <div key={i}>{prop.content}</div>
+          ))}
+        </>
+      );
+
+      const manifest: TemplateParameterSchema = {
+        steps: [
+          {
+            title: 'Step 1',
+            schema: {
+              type: 'object',
+              'ui:ObjectFieldTemplate': 'Layout',
+              properties: {
+                field1: {
+                  type: 'string',
+                },
+              },
+            },
+          },
+        ],
+        title: 'scaffolder layouts',
+      };
+
+      const { getByText, getByRole } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={manifest}
+            extensions={[]}
+            onCreate={jest.fn()}
+            layouts={[{ name: 'Layout', component: ScaffolderLayout }]}
+          />
+        </SecretsContextProvider>,
+      );
+
+      expect(getByText('A Scaffolder Layout')).toBeInTheDocument();
+      expect(getByRole('textbox', { name: 'field1' })).toBeInTheDocument();
+    });
+  });
+
+  describe('state tracking', () => {
+    it('should render perfectly when using field extensions that may do some strange things', async () => {
+      const FieldExtension = ({
+        formData,
+        onChange,
+      }: FieldExtensionComponentProps<{ repoOrg?: string }>) => {
+        useEffect(() => {
+          if (!formData?.repoOrg) onChange({ repoOrg: 'backstage' });
+        }, [formData, onChange]);
+
+        return (
+          <>
+            Some field
+            <input
+              type="text"
+              value={formData?.repoOrg ?? ''}
+              onChange={e => onChange({ repoOrg: e.target.value })}
+            />
+          </>
+        );
+      };
+
+      const manifest: TemplateParameterSchema = {
+        title: 'Custom Fields',
+        steps: [
+          {
+            title: 'Test',
+            schema: {
+              properties: {
+                thing: {
+                  type: 'object',
+                  'ui:field': 'FieldExtension',
+                  properties: {
+                    repoOrg: {
+                      type: 'string',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      };
+
+      // `onCreate` must be async to mock the submit button disabled behavior
+      const onCreate = jest.fn(
+        () => new Promise<void>(resolve => setTimeout(resolve, 0)),
+      );
+
+      const { getByRole } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={manifest}
+            onCreate={onCreate}
+            extensions={[
+              {
+                name: 'FieldExtension',
+                component: FieldExtension,
+              },
+            ]}
+          />
+        </SecretsContextProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(getByRole('button', { name: 'Review' }));
+      });
+
+      fireEvent.click(getByRole('button', { name: 'Create' }));
+
+      await waitFor(() =>
+        expect(getByRole('button', { name: 'Create' })).toBeDisabled(),
+      );
+
+      await act(async () => {
+        fireEvent.click(getByRole('button', { name: 'Create' }));
+      });
+
+      expect(onCreate).toHaveBeenCalledTimes(1);
+
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          thing: { repoOrg: 'backstage' },
+        }),
+      );
+    });
+  });
+
+  describe('conditional steps with when', () => {
+    it.each(['nested', 'reference'])(
+      'excludes hidden %s fields while preserving visible values',
+      async shape => {
+        const visible: JsonObject =
+          shape === 'nested'
+            ? {
+                properties: {
+                  config: {
+                    type: 'object',
+                    properties: { project: { type: 'string' } },
+                  },
+                },
+              }
+            : { properties: { name: { type: 'string' } } };
+        const hidden: JsonObject =
+          shape === 'nested'
+            ? {
+                properties: {
+                  config: {
+                    type: 'object',
+                    properties: { awsRegion: { type: 'string' } },
+                  },
+                },
+              }
+            : {
+                definitions: {
+                  Hidden: {
+                    type: 'object',
+                    properties: { awsRegion: { type: 'string' } },
+                  },
+                },
+                allOf: [{ $ref: '#/definitions/Hidden' }],
+              };
+        const initial: Record<string, JsonValue> =
+          shape === 'nested'
+            ? { config: { project: 'keep', awsRegion: 'remove' } }
+            : { name: 'keep', awsRegion: 'remove' };
+        const onCreate = jest.fn();
+        await renderInTestApp(
+          <SecretsContextProvider>
+            <Stepper
+              manifest={{
+                title: 'Hidden fields',
+                steps: [
+                  { title: 'Visible', schema: visible },
+                  { title: 'Hidden', when: false, schema: hidden },
+                ],
+              }}
+              extensions={[]}
+              initialState={initial}
+              onCreate={onCreate}
+            />
+          </SecretsContextProvider>,
+        );
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+        });
+        expect(onCreate).toHaveBeenCalledWith(
+          shape === 'nested'
+            ? { config: { project: 'keep' } }
+            : { name: 'keep' },
+        );
+      },
+    );
+
+    it('uses Nunjitsu conditions and keeps steps with matching titles separate', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Conditional Steps',
+        steps: [
+          {
+            title: 'Provider',
+            schema: { properties: { provider: { type: 'string' } } },
+          },
+          {
+            title: 'Configuration',
+            when: "${{ parameters.provider | lower in ['aws'] and not parameters.disabled }}",
+            schema: { properties: { awsRegion: { type: 'string' } } },
+          },
+          {
+            title: 'Configuration',
+            when: "${{ parameters.provider === 'GCP' }}",
+            schema: { properties: { project: { type: 'string' } } },
+          },
+          { title: 'Configuration', schema: { properties: {} } },
+        ],
+      };
+      const onCreate = jest.fn();
+      const consoleError = jest.spyOn(console, 'error').mockImplementation();
+      try {
+        await renderInTestApp(
+          <SecretsContextProvider>
+            <Stepper
+              manifest={manifest}
+              extensions={[]}
+              initialState={{ provider: 'AWS', disabled: false }}
+              onCreate={onCreate}
+            />
+          </SecretsContextProvider>,
+        );
+
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        });
+        expect(
+          screen.getByRole('textbox', { name: 'awsRegion' }),
+        ).toBeInTheDocument();
+        await act(async () => {
+          fireEvent.change(screen.getByRole('textbox', { name: 'awsRegion' }), {
+            target: { value: 'us-east-1' },
+          });
+          fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        });
+        await act(async () => {
+          fireEvent.change(screen.getByRole('textbox', { name: 'provider' }), {
+            target: { value: 'GCP' },
+          });
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        });
+        expect(
+          screen.queryByRole('textbox', { name: 'awsRegion' }),
+        ).not.toBeInTheDocument();
+        await act(async () => {
+          fireEvent.change(screen.getByRole('textbox', { name: 'project' }), {
+            target: { value: 'my-project' },
+          });
+          fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+        });
+
+        expect(onCreate).toHaveBeenCalledWith({
+          provider: 'GCP',
+          disabled: false,
+          project: 'my-project',
+        });
+        expect(consoleError.mock.calls.flat().join(' ')).not.toContain(
+          'Encountered two children with the same key',
+        );
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it('keeps malformed conditions visible so required fields can be completed', async () => {
+      await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={{
+              title: 'Malformed Condition',
+              steps: [
+                {
+                  title: 'Required Input',
+                  when: '${{ invalid...syntax }}',
+                  schema: {
+                    required: ['name'],
+                    properties: { name: { type: 'string' } },
+                  },
+                },
+              ],
+            }}
+            extensions={[]}
+            onCreate={jest.fn()}
+          />
+        </SecretsContextProvider>,
+      );
+      expect(screen.getByRole('textbox', { name: /name/ })).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Create' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('should hide steps whose when condition evaluates to false', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Conditional Steps',
+        steps: [
+          {
+            title: 'Choose Provider',
+            schema: {
+              properties: {
+                cloudProvider: {
+                  type: 'string',
+                  enum: ['AWS', 'GCP'],
+                },
+              },
+            },
+          },
+          {
+            title: 'AWS Config',
+            when: "${{ parameters.cloudProvider === 'AWS' }}",
+            schema: {
+              properties: {
+                awsRegion: { type: 'string' },
+              },
+            },
+          },
+          {
+            title: 'GCP Config',
+            when: "${{ parameters.cloudProvider === 'GCP' }}",
+            schema: {
+              properties: {
+                gcpProjectId: { type: 'string' },
+              },
+            },
+          },
+        ],
+      };
+
+      const { getByText, queryByText } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+        </SecretsContextProvider>,
+      );
+
+      expect(getByText('Choose Provider')).toBeInTheDocument();
+      expect(queryByText('AWS Config')).not.toBeInTheDocument();
+      expect(queryByText('GCP Config')).not.toBeInTheDocument();
+    });
+
+    it('should show conditional steps when their condition becomes true', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Conditional Steps',
+        steps: [
+          {
+            title: 'Choose Provider',
+            schema: {
+              properties: {
+                cloudProvider: {
+                  type: 'string',
+                },
+              },
+            },
+          },
+          {
+            title: 'AWS Config',
+            when: "${{ parameters.cloudProvider === 'AWS' }}",
+            schema: {
+              properties: {
+                awsRegion: { type: 'string' },
+              },
+            },
+          },
+        ],
+      };
+
+      const { getByText, queryByText, getByRole } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+        </SecretsContextProvider>,
+      );
+
+      expect(queryByText('AWS Config')).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.change(getByRole('textbox'), {
+          target: { value: 'AWS' },
+        });
+      });
+
+      expect(getByText('AWS Config')).toBeInTheDocument();
+    });
+
+    it('should exclude hidden step data from submission', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Conditional Steps',
+        steps: [
+          {
+            title: 'Choose Provider',
+            schema: {
+              properties: {
+                cloudProvider: {
+                  type: 'string',
+                },
+              },
+            },
+          },
+          {
+            title: 'AWS Config',
+            when: "${{ parameters.cloudProvider === 'AWS' }}",
+            schema: {
+              properties: {
+                awsRegion: { type: 'string' },
+              },
+            },
+          },
+        ],
+      };
+
+      const onCreate = jest.fn();
+
+      const { getByRole } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={manifest}
+            extensions={[]}
+            onCreate={onCreate}
+            initialState={{ cloudProvider: 'GCP', awsRegion: 'us-east-1' }}
+          />
+        </SecretsContextProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(getByRole('button', { name: 'Review' }));
+      });
+
+      await act(async () => {
+        fireEvent.click(getByRole('button', { name: 'Create' }));
+      });
+
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.not.objectContaining({ awsRegion: expect.anything() }),
+      );
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ cloudProvider: 'GCP' }),
+      );
+    });
+
+    it('hides chained steps whose condition depends on a hidden step', async () => {
+      const onCreate = jest.fn();
+      await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={{
+              title: 'Chained Steps',
+              steps: [
+                {
+                  title: 'Provider',
+                  schema: { properties: { cloudProvider: { type: 'string' } } },
+                },
+                {
+                  title: 'AWS Config',
+                  when: "${{ parameters.cloudProvider === 'AWS' }}",
+                  schema: { properties: { awsAdvanced: { type: 'boolean' } } },
+                },
+                {
+                  title: 'AWS Advanced',
+                  when: '${{ parameters.awsAdvanced }}',
+                  schema: { properties: { awsTuning: { type: 'string' } } },
+                },
+              ],
+            }}
+            extensions={[]}
+            onCreate={onCreate}
+            initialState={{
+              cloudProvider: 'GCP',
+              awsAdvanced: true,
+              awsTuning: 'fast',
+            }}
+          />
+        </SecretsContextProvider>,
+      );
+
+      expect(screen.queryByText('AWS Config')).not.toBeInTheDocument();
+      expect(screen.queryByText('AWS Advanced')).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      });
+      expect(onCreate).toHaveBeenCalledWith({ cloudProvider: 'GCP' });
+    });
+
+    it('stays on the active step when an earlier step is shown', async () => {
+      await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={{
+              title: 'Active Step',
+              steps: [
+                {
+                  title: 'Start',
+                  schema: {
+                    properties: { name: { type: 'string', title: 'Name' } },
+                  },
+                },
+                {
+                  title: 'Early',
+                  when: '${{ parameters.toggle }}',
+                  schema: {
+                    properties: { early: { type: 'string', title: 'Early' } },
+                  },
+                },
+                {
+                  title: 'Details',
+                  schema: {
+                    properties: { toggle: { type: 'string', title: 'Toggle' } },
+                  },
+                },
+              ],
+            }}
+            extensions={[]}
+            onCreate={jest.fn()}
+          />
+        </SecretsContextProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      });
+      expect(
+        screen.getByRole('textbox', { name: 'Toggle' }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Early')).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.change(screen.getByRole('textbox', { name: 'Toggle' }), {
+          target: { value: 'yes' },
+        });
+      });
+
+      expect(screen.getByText('Early')).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Toggle' })).toHaveValue(
+        'yes',
+      );
+      expect(
+        screen.queryByRole('textbox', { name: 'Early' }),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+      });
+      expect(
+        screen.getByRole('textbox', { name: 'Early' }),
+      ).toBeInTheDocument();
+    });
+
+    it('masks secrets on review when hidden steps own related fields', async () => {
+      await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper
+            manifest={{
+              title: 'Review masking',
+              steps: [
+                {
+                  title: 'Hidden mode',
+                  when: false,
+                  schema: { properties: { mode: { type: 'string' } } },
+                },
+                {
+                  title: 'Hidden connection',
+                  when: false,
+                  schema: {
+                    properties: {
+                      connection: {
+                        type: 'object',
+                        additionalProperties: true,
+                        'ui:backstage': { review: { show: false } },
+                      },
+                    },
+                  },
+                },
+                {
+                  title: 'Visible',
+                  schema: {
+                    properties: {
+                      connection: {
+                        type: 'object',
+                        properties: { username: { type: 'string' } },
+                      },
+                    },
+                    dependencies: {
+                      mode: {
+                        properties: {
+                          password: {
+                            type: 'string',
+                            'ui:widget': 'password',
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            }}
+            extensions={[]}
+            onCreate={jest.fn()}
+            initialState={{
+              mode: 'create',
+              password: 'DEPENDENCY_SECRET',
+              connection: { username: 'user', password: 'NESTED_SECRET' },
+            }}
+          />
+        </SecretsContextProvider>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+      });
+
+      expect(screen.queryByText('DEPENDENCY_SECRET')).not.toBeInTheDocument();
+      expect(screen.queryByText('NESTED_SECRET')).not.toBeInTheDocument();
+      expect(screen.getByText('user')).toBeInTheDocument();
+    });
+
+    it('should show steps with boolean when: true', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Boolean Condition',
+        steps: [
+          {
+            title: 'Always Shown',
+            when: true,
+            schema: { properties: { name: { type: 'string' } } },
+          },
+          {
+            title: 'Never Shown',
+            when: false,
+            schema: { properties: { hidden: { type: 'string' } } },
+          },
+        ],
+      };
+
+      const { getByText, queryByText } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+        </SecretsContextProvider>,
+      );
+
+      expect(getByText('Always Shown')).toBeInTheDocument();
+      expect(queryByText('Never Shown')).not.toBeInTheDocument();
+    });
+
+    it('should show steps without a when condition', async () => {
+      const manifest: TemplateParameterSchema = {
+        title: 'Mixed Steps',
+        steps: [
+          {
+            title: 'Unconditional Step',
+            schema: { properties: { name: { type: 'string' } } },
+          },
+          {
+            title: 'Conditional Step',
+            when: false,
+            schema: { properties: { other: { type: 'string' } } },
+          },
+        ],
+      };
+
+      const { getByText, queryByText } = await renderInTestApp(
+        <SecretsContextProvider>
+          <Stepper manifest={manifest} extensions={[]} onCreate={jest.fn()} />
+        </SecretsContextProvider>,
+      );
+
+      expect(getByText('Unconditional Step')).toBeInTheDocument();
+      expect(queryByText('Conditional Step')).not.toBeInTheDocument();
+    });
+  });
+});

@@ -20,12 +20,12 @@
  * @packageDocumentation
  */
 
-export { ConfigReader } from './reader';
 export type {
-  AppConfig,
-  Config,
   JsonArray,
   JsonObject,
   JsonPrimitive,
   JsonValue,
-} from './types';
+} from './deprecatedTypes';
+export { readDurationFromConfig } from './readDurationFromConfig';
+export { ConfigReader } from './reader';
+export type { AppConfig, Config } from './types';

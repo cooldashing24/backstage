@@ -14,26 +14,29 @@
  * limitations under the License.
  */
 
-import React, {
-  useState,
+import Card from '@material-ui/core/Card';
+import CardContent from '@material-ui/core/CardContent';
+import CardHeader from '@material-ui/core/CardHeader';
+import Divider from '@material-ui/core/Divider';
+import { makeStyles, withStyles } from '@material-ui/core/styles';
+import Tab, { TabProps } from '@material-ui/core/Tab';
+import Tabs from '@material-ui/core/Tabs';
+import {
+  ChangeEvent,
+  Children,
+  isValidElement,
+  PropsWithChildren,
   ReactElement,
   ReactNode,
-  PropsWithChildren,
+  useState,
 } from 'react';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  Divider,
-  withStyles,
-  makeStyles,
-  Tabs,
-  Tab,
-  TabProps,
-} from '@material-ui/core';
 import { BottomLink, BottomLinkProps } from '../BottomLink';
 import { ErrorBoundary, ErrorBoundaryProps } from '../ErrorBoundary';
 
+/**
+ * @deprecated Use the replacement described in {@link TabbedCard} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type TabbedCardClassKey = 'root' | 'indicator';
 
 const useTabsStyles = makeStyles(
@@ -50,6 +53,11 @@ const useTabsStyles = makeStyles(
   { name: 'BackstageTabbedCard' },
 );
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link TabbedCard} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type BoldHeaderClassKey = 'root' | 'title' | 'subheader';
 
 const BoldHeader = withStyles(
@@ -66,12 +74,19 @@ type Props = {
   slackChannel?: string;
   errorBoundaryProps?: ErrorBoundaryProps;
   children?: ReactElement<TabProps>[];
-  onChange?: (event: React.ChangeEvent<{}>, value: number | string) => void;
+  onChange?: (event: ChangeEvent<{}>, value: number | string) => void;
   title?: string;
   value?: number | string;
   deepLink?: BottomLinkProps;
 };
 
+/**
+ * @deprecated Compose `Card`, `CardHeader`, `CardBody`, `Tabs`, `TabList`,
+ * `Tab`, and `TabPanel` from `@backstage/ui` instead. Adapt selection to
+ * tab keys and `onSelectionChange`, and use `CardFooter` with a link for
+ * `deepLink`. Keep an error boundary around the content if you rely on this
+ * component's error handling; BUI Card and Tabs do not provide it.
+ */
 export function TabbedCard(props: PropsWithChildren<Props>) {
   const {
     slackChannel,
@@ -91,13 +106,19 @@ export function TabbedCard(props: PropsWithChildren<Props>) {
 
   let selectedTabContent: ReactNode;
   if (!value) {
-    React.Children.map(children, (child, index) => {
-      if (index === selectedIndex) selectedTabContent = child?.props.children;
+    Children.map(children, (child, index) => {
+      if (isValidElement(child) && index === selectedIndex) {
+        selectedTabContent = child?.props.children;
+      }
     });
   } else {
-    React.Children.map(children, child => {
-      if (child?.props.value === value)
+    Children.map(children, child => {
+      if (
+        isValidElement<{ children?: ReactNode; value?: unknown }>(child) &&
+        child?.props.value === value
+      ) {
         selectedTabContent = child?.props.children;
+      }
     });
   }
 
@@ -109,7 +130,6 @@ export function TabbedCard(props: PropsWithChildren<Props>) {
       <ErrorBoundary {...errProps}>
         {title && <BoldHeader title={title} />}
         <Tabs
-          selectionFollowsFocus
           classes={tabsClasses}
           value={value || selectedIndex}
           onChange={handleChange}
@@ -124,6 +144,11 @@ export function TabbedCard(props: PropsWithChildren<Props>) {
   );
 }
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link CardTab} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type CardTabClassKey = 'root' | 'selected';
 
 const useCardTabStyles = makeStyles(
@@ -141,7 +166,7 @@ const useCardTabStyles = makeStyles(
       },
     },
     selected: {
-      fontWeight: 'bold',
+      fontWeight: theme.typography.fontWeightBold,
     },
   }),
   { name: 'BackstageCardTab' },
@@ -151,6 +176,15 @@ type CardTabProps = TabProps & {
   children: ReactNode;
 };
 
+/**
+ * Card tab component used in {@link TabbedCard}
+ *
+ * @public
+ *
+ * @deprecated Use `Tab` and `TabPanel` from `@backstage/ui` within a BUI
+ * `Tabs` and `TabList` composition. Give matching tabs and panels the same
+ * `id` and move tab content into `TabPanel`.
+ */
 export function CardTab(props: PropsWithChildren<CardTabProps>) {
   const { children, ...restProps } = props;
   const classes = useCardTabStyles();

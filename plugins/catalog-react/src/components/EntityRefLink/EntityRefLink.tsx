@@ -13,67 +13,82 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import {
-  Entity,
-  EntityName,
-  ENTITY_DEFAULT_NAMESPACE,
-} from '@backstage/catalog-model';
-import React, { forwardRef } from 'react';
-import { entityRouteRef } from '../../routes';
-import { formatEntityRefTitle } from './format';
+
+import { CompoundEntityRef, Entity } from '@backstage/catalog-model';
 import { Link, LinkProps } from '@backstage/core-components';
 import { useRouteRef } from '@backstage/core-plugin-api';
-import { Tooltip } from '@material-ui/core';
+import { ReactNode, forwardRef, useCallback } from 'react';
+import { entityRouteParams, entityRouteRef } from '../../routes';
+import { EntityDisplayName } from '../EntityDisplayName';
 
+/**
+ * Props for {@link EntityRefLink}.
+ *
+ * @public
+ */
 export type EntityRefLinkProps = {
-  entityRef: Entity | EntityName;
+  entityRef: Entity | CompoundEntityRef | string;
   defaultKind?: string;
+  defaultNamespace?: string;
+  /** @deprecated This option should no longer be used; presentation is requested through the {@link entityPresentationApiRef} instead */
   title?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
+  hideIcon?: boolean;
+  disableTooltip?: boolean;
 } & Omit<LinkProps, 'to'>;
 
+/**
+ * Shows a clickable link to an entity.
+ *
+ * @public
+ */
 export const EntityRefLink = forwardRef<any, EntityRefLinkProps>(
   (props, ref) => {
-    const { entityRef, defaultKind, title, children, ...linkProps } = props;
-    const entityRoute = useRouteRef(entityRouteRef);
-
-    let kind;
-    let namespace;
-    let name;
-
-    if ('metadata' in entityRef) {
-      kind = entityRef.kind;
-      namespace = entityRef.metadata.namespace;
-      name = entityRef.metadata.name;
-    } else {
-      kind = entityRef.kind;
-      namespace = entityRef.namespace;
-      name = entityRef.name;
-    }
-
-    kind = kind.toLocaleLowerCase('en-US');
-
-    const routeParams = {
-      kind,
-      namespace:
-        namespace?.toLocaleLowerCase('en-US') ?? ENTITY_DEFAULT_NAMESPACE,
-      name,
-    };
-    const formattedEntityRefTitle = formatEntityRefTitle(entityRef, {
+    const {
+      entityRef,
       defaultKind,
-    });
+      defaultNamespace,
+      title,
+      children,
+      hideIcon,
+      disableTooltip,
+      ...linkProps
+    } = props;
+    const entityLink = useEntityRefLink();
 
-    const link = (
-      <Link {...linkProps} ref={ref} to={entityRoute(routeParams)}>
-        {children}
-        {!children && (title ?? formattedEntityRefTitle)}
+    const content = children ?? title ?? (
+      <EntityDisplayName
+        entityRef={entityRef}
+        defaultKind={defaultKind}
+        defaultNamespace={defaultNamespace}
+        hideIcon={hideIcon}
+        disableTooltip={disableTooltip}
+      />
+    );
+
+    return (
+      <Link {...linkProps} ref={ref} to={entityLink(props.entityRef)}>
+        {content}
       </Link>
     );
-
-    return title ? (
-      <Tooltip title={formattedEntityRefTitle}>{link}</Tooltip>
-    ) : (
-      link
-    );
   },
-);
+) as (props: EntityRefLinkProps) => JSX.Element;
+
+/**
+ * Returns a function that generates a route path to the given entity.
+ *
+ * @public
+ */
+export function useEntityRefLink(): (
+  entityRef: Entity | CompoundEntityRef | string,
+) => string {
+  const entityRoute = useRouteRef(entityRouteRef);
+
+  return useCallback(
+    (entityRef: Entity | CompoundEntityRef | string) => {
+      const routeParams = entityRouteParams(entityRef, { encodeParams: true });
+      return entityRoute(routeParams);
+    },
+    [entityRoute],
+  );
+}

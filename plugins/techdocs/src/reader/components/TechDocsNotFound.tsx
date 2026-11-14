@@ -14,32 +14,24 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { useApi, configApiRef } from '@backstage/core-plugin-api';
-import { ErrorPage } from '@backstage/core-components';
+import { useEffect } from 'react';
+import { useApp, useAnalytics } from '@backstage/core-plugin-api';
+import { useTechDocsReaderPage } from '@backstage/plugin-techdocs-react';
+import { useLocation } from 'react-router-dom';
 
-type Props = {
-  errorMessage?: string;
-};
+export const TechDocsNotFound = () => {
+  const app = useApp();
+  const { NotFoundErrorPage } = app.getComponents();
+  const analyticsApi = useAnalytics();
+  const { entityRef } = useTechDocsReaderPage();
+  const location = useLocation();
 
-export const TechDocsNotFound = ({ errorMessage }: Props) => {
-  const techdocsBuilder =
-    useApi(configApiRef).getOptionalString('techdocs.builder');
+  useEffect(() => {
+    const { pathname, search, hash } = location;
+    analyticsApi.captureEvent('not-found', `${pathname}${search}${hash}`, {
+      attributes: entityRef,
+    });
+  }, [analyticsApi, entityRef, location]);
 
-  let additionalInfo = '';
-  if (techdocsBuilder !== 'local') {
-    additionalInfo =
-      "Note that techdocs.builder is not set to 'local' in your config, which means this Backstage app will not " +
-      "generate docs if they are not found. Make sure the project's docs are generated and published by some external " +
-      "process (e.g. CI/CD pipeline). Or change techdocs.builder to 'local' to generate docs from this Backstage " +
-      'instance.';
-  }
-
-  return (
-    <ErrorPage
-      status="404"
-      statusMessage={errorMessage || 'Documentation not found'}
-      additionalInfo={additionalInfo}
-    />
-  );
+  return <NotFoundErrorPage />;
 };

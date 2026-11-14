@@ -1,0 +1,136 @@
+/*
+ * Copyright 2020 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { ConfigReader } from '@backstage/config';
+import { Generators } from './generators';
+import { TechdocsGenerator } from './techdocs';
+import { mockServices } from '@backstage/backend-test-utils';
+
+const logger = mockServices.logger.mock();
+
+const mockEntity = {
+  apiVersion: 'version',
+  kind: 'TestKind',
+  metadata: {
+    name: 'testName',
+  },
+};
+
+describe('generators', () => {
+  it('should return error if no generator is registered', async () => {
+    const generators = new Generators();
+
+    expect(() => generators.get(mockEntity)).toThrow(
+      'No TechDocs generator registered for engine "mkdocs" (from techdocs.generator.defaultEngine)',
+    );
+  });
+
+  it('should name the annotation when an annotated engine is not registered', async () => {
+    const generators = new Generators();
+    generators.register('mkdocs', { run: jest.fn() });
+
+    expect(() =>
+      generators.get({
+        ...mockEntity,
+        metadata: {
+          name: 'testName',
+          annotations: { 'backstage.io/techdocs-engine': 'unknown' },
+        },
+      }),
+    ).toThrow(
+      'No TechDocs generator registered for engine "unknown" (from the backstage.io/techdocs-engine annotation). Registered engines: mkdocs',
+    );
+  });
+
+  it('should treat the legacy techdocs key as an alias of mkdocs', async () => {
+    const generators = new Generators();
+    const custom = { run: jest.fn() };
+
+    generators.register('techdocs', custom);
+
+    expect(generators.get(mockEntity)).toBe(custom);
+  });
+
+  it('should return correct registered generator', async () => {
+    const generators = new Generators();
+    const techdocs = TechdocsGenerator.fromConfig(new ConfigReader({}), {
+      logger,
+    });
+
+    generators.register('mkdocs', techdocs);
+
+    expect(generators.get(mockEntity)).toBe(techdocs);
+  });
+
+  it('should register generator under the defaultEngine key from config', async () => {
+    const config = new ConfigReader({
+      techdocs: {
+        generator: {
+          defaultEngine: 'mkdocs',
+        },
+      },
+    });
+
+    const generators = await Generators.fromConfig(config, { logger });
+
+    expect(generators.get(mockEntity)).toBeDefined();
+  });
+
+  it('should throw when no entity is provided', async () => {
+    const generators = new Generators();
+
+    expect(() => generators.get(undefined as any)).toThrow(
+      'No entity provided',
+    );
+  });
+
+  it('should use backstage.io/techdocs-engine annotation when present', async () => {
+    const generators = new Generators();
+    const mkdocsGen = TechdocsGenerator.fromConfig(new ConfigReader({}), {
+      logger,
+    });
+    const fakeZensicalGen = { run: jest.fn() };
+
+    generators.register('mkdocs', mkdocsGen);
+    generators.register('zensical', fakeZensicalGen);
+
+    const entityWithAnnotation = {
+      apiVersion: 'version',
+      kind: 'TestKind',
+      metadata: {
+        name: 'testName',
+        annotations: {
+          'backstage.io/techdocs-engine': 'zensical',
+        },
+      },
+    };
+
+    expect(generators.get(entityWithAnnotation)).toBe(fakeZensicalGen);
+  });
+
+  it('should fall back to defaultEngine when annotation is absent', async () => {
+    const generators = new Generators();
+    const mkdocsGen = TechdocsGenerator.fromConfig(new ConfigReader({}), {
+      logger,
+    });
+    const fakeZensicalGen = { run: jest.fn() };
+
+    generators.register('mkdocs', mkdocsGen);
+    generators.register('zensical', fakeZensicalGen);
+
+    expect(generators.get(mockEntity)).toBe(mkdocsGen);
+  });
+});

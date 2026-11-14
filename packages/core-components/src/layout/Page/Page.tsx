@@ -14,22 +14,35 @@
  * limitations under the License.
  */
 
-import React, { PropsWithChildren } from 'react';
-import { BackstageTheme } from '@backstage/theme';
-import { makeStyles, ThemeProvider } from '@material-ui/core';
+import { ReactNode } from 'react';
+import { makeStyles, Theme, ThemeProvider } from '@material-ui/core/styles';
+import classNames from 'classnames';
 
+/**
+ * Style keys for {@link Page}.
+ * @public
+ * @deprecated Legacy Page styling. See {@link Page} for migration guidance.
+ */
 export type PageClassKey = 'root';
 
 const useStyles = makeStyles(
-  () => ({
+  theme => ({
     root: {
       display: 'grid',
       gridTemplateAreas:
         "'pageHeader pageHeader pageHeader' 'pageSubheader pageSubheader pageSubheader' 'pageNav pageContent pageSidebar'",
       gridTemplateRows: 'max-content auto 1fr',
       gridTemplateColumns: 'auto 1fr auto',
-      height: '100vh',
       overflowY: 'auto',
+      height: '100vh',
+      [theme.breakpoints.down('xs')]: {
+        height: '100%',
+      },
+      '@media print': {
+        display: 'block',
+        height: 'auto',
+        overflowY: 'inherit',
+      },
     },
   }),
   { name: 'BackstagePage' },
@@ -37,19 +50,35 @@ const useStyles = makeStyles(
 
 type Props = {
   themeId: string;
+  className?: string;
+  children?: ReactNode;
 };
 
-export function Page(props: PropsWithChildren<Props>) {
-  const { themeId, children } = props;
+/**
+ * A themed legacy page layout.
+ * @public
+ * @deprecated Legacy page layout, superseded for new frontend development. Use
+ * `PageBlueprint` from `@backstage/frontend-plugin-api` for framework-managed
+ * pages, or its `PageLayout` for a custom page shell. For standalone layouts,
+ * compose components from `@backstage/ui`. These APIs do not reproduce legacy
+ * page themes; migrate theme styling explicitly.
+ */
+export function Page(props: Props) {
+  const { themeId, className, children } = props;
   const classes = useStyles();
   return (
     <ThemeProvider
-      theme={(baseTheme: BackstageTheme) => ({
+      theme={(baseTheme: Theme) => ({
         ...baseTheme,
         page: baseTheme.getPageTheme({ themeId }),
       })}
     >
-      <div className={classes.root}>{children}</div>
+      <main
+        className={classNames(classes.root, className)}
+        data-backstage-core-page=""
+      >
+        {children}
+      </main>
     </ThemeProvider>
   );
 }

@@ -17,170 +17,226 @@
 import express from 'express';
 import Router from 'express-promise-router';
 import cookieParser from 'cookie-parser';
-import { Logger } from 'winston';
 import {
-  defaultAuthProviderFactories,
-  AuthProviderFactory,
-} from '../providers';
-import {
-  PluginDatabaseManager,
-  PluginEndpointDiscovery,
-} from '@backstage/backend-common';
-import { NotFoundError } from '@backstage/errors';
-import { CatalogClient } from '@backstage/catalog-client';
-import { Config } from '@backstage/config';
-import { createOidcRouter, DatabaseKeyStore, TokenFactory } from '../identity';
+  AuditorService,
+  AuthService,
+  DatabaseService,
+  DiscoveryService,
+  HttpAuthService,
+  LoggerService,
+  RootConfigService,
+} from '@backstage/backend-plugin-api';
+import { AuthOwnershipResolver } from '@backstage/plugin-auth-node';
+import { CatalogService } from '@backstage/plugin-catalog-node';
+import { InputError, NotFoundError } from '@backstage/errors';
+import { parseEntityRef, stringifyEntityRef } from '@backstage/catalog-model';
+import { KeyStores } from '../identity/KeyStores';
+import { TokenFactory } from '../identity/TokenFactory';
+import { UserInfoDatabase } from '../database/UserInfoDatabase';
 import session from 'express-session';
+import connectSessionKnex from 'connect-session-knex';
 import passport from 'passport';
-import { Minimatch } from 'minimatch';
+import { AuthDatabase } from '../database/AuthDatabase';
+import { readBackstageTokenExpiration } from './readTokenExpiration';
+import { TokenIssuer } from '../identity/types';
+import { StaticTokenIssuer } from '../identity/StaticTokenIssuer';
+import { StaticKeyStore } from '../identity/StaticKeyStore';
+import { bindProviderRouters, ProviderFactories } from '../providers/router';
+import { OidcRouter } from './OidcRouter';
+import { OidcDatabase } from '../database/OidcDatabase';
+import { OfflineAccessService } from './OfflineAccessService';
+import { z } from 'zod/v4';
+import { fromZodError } from 'zod-validation-error/v4';
 
-type ProviderFactories = { [s: string]: AuthProviderFactory };
+const revokeOfflineSessionsRequestSchema = z.object({
+  userEntityRef: z
+    .string()
+    .min(1)
+    .transform((ref, ctx) => {
+      try {
+        const entityRef = parseEntityRef(ref, { defaultKind: 'user' });
+        if (entityRef.kind.toLowerCase() === 'user') {
+          return stringifyEntityRef(entityRef);
+        }
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Must refer to a user entity',
+        });
+      } catch (error) {
+        ctx.addIssue({ code: 'custom', message: String(error) });
+      }
+      return z.NEVER;
+    }),
+});
 
-export interface RouterOptions {
-  logger: Logger;
-  database: PluginDatabaseManager;
-  config: Config;
-  discovery: PluginEndpointDiscovery;
+interface RouterOptions {
+  logger: LoggerService;
+  database: DatabaseService;
+  config: RootConfigService;
+  discovery: DiscoveryService;
+  auth: AuthService;
+  tokenFactoryAlgorithm?: string;
   providerFactories?: ProviderFactories;
+  catalog: CatalogService;
+  ownershipResolver?: AuthOwnershipResolver;
+  httpAuth: HttpAuthService;
+  auditor?: AuditorService;
+  offlineAccess?: OfflineAccessService;
 }
 
-export async function createRouter({
-  logger,
-  config,
-  discovery,
-  database,
-  providerFactories,
-}: RouterOptions): Promise<express.Router> {
+export async function createRouter(
+  options: RouterOptions,
+): Promise<express.Router> {
+  const {
+    logger,
+    config,
+    discovery,
+    database: db,
+    tokenFactoryAlgorithm,
+    providerFactories = {},
+    httpAuth,
+    auditor,
+    offlineAccess,
+  } = options;
+
   const router = Router();
 
   const appUrl = config.getString('app.baseUrl');
   const authUrl = await discovery.getExternalBaseUrl('auth');
+  const backstageTokenExpiration = readBackstageTokenExpiration(config);
+  const database = AuthDatabase.create(db);
 
-  const keyDurationSeconds = 3600;
+  const keyStore = await KeyStores.fromConfig(config, {
+    logger,
+    database,
+  });
 
-  const keyStore = await DatabaseKeyStore.create({
-    database: await database.getClient(),
+  const userInfo = await UserInfoDatabase.create({
+    database,
   });
-  const tokenIssuer = new TokenFactory({
-    issuer: authUrl,
-    keyStore,
-    keyDurationSeconds,
-    logger: logger.child({ component: 'token-factory' }),
-  });
-  const catalogApi = new CatalogClient({ discoveryApi: discovery });
+
+  const omitClaimsFromToken =
+    config.getOptionalBoolean('auth.omitIdentityTokenOwnershipClaim') ?? true
+      ? ['ent']
+      : [];
+
+  let tokenIssuer: TokenIssuer;
+  if (keyStore instanceof StaticKeyStore) {
+    tokenIssuer = new StaticTokenIssuer(
+      {
+        logger: logger.child({ component: 'token-factory' }),
+        issuer: authUrl,
+        sessionExpirationSeconds: backstageTokenExpiration,
+        omitClaimsFromToken,
+      },
+      keyStore as StaticKeyStore,
+    );
+  } else {
+    tokenIssuer = new TokenFactory({
+      issuer: authUrl,
+      keyStore,
+      keyDurationSeconds: backstageTokenExpiration,
+      logger: logger.child({ component: 'token-factory' }),
+      algorithm:
+        tokenFactoryAlgorithm ??
+        config.getOptionalString('auth.identityTokenAlgorithm'),
+      omitClaimsFromToken,
+    });
+  }
 
   const secret = config.getOptionalString('auth.session.secret');
   if (secret) {
     router.use(cookieParser(secret));
-    // TODO: Configure the server-side session storage.  The default MemoryStore is not designed for production
-    router.use(session({ secret, saveUninitialized: false, resave: false }));
+    const enforceCookieSSL = authUrl.startsWith('https');
+    const KnexSessionStore = connectSessionKnex(session);
+    router.use(
+      session({
+        secret,
+        saveUninitialized: false,
+        resave: false,
+        cookie: { secure: enforceCookieSSL ? 'auto' : false },
+        store: new KnexSessionStore({
+          createtable: false,
+          knex: await database.get(),
+        }),
+      }),
+    );
     router.use(passport.initialize());
     router.use(passport.session());
   } else {
     router.use(cookieParser());
   }
+
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json());
 
-  const allProviderFactories = {
-    ...defaultAuthProviderFactories,
-    ...providerFactories,
-  };
-  const providersConfig = config.getConfig('auth.providers');
-  const configuredProviders = providersConfig.keys();
+  bindProviderRouters(router, {
+    providers: providerFactories,
+    appUrl,
+    baseUrl: authUrl,
+    tokenIssuer,
+    ...options,
+    auth: options.auth,
+    userInfo,
+  });
 
-  const isOriginAllowed = createOriginFilter(config);
+  const oidc = await OidcDatabase.create({ database });
 
-  for (const [providerId, providerFactory] of Object.entries(
-    allProviderFactories,
-  )) {
-    if (configuredProviders.includes(providerId)) {
-      logger.info(`Configuring provider, ${providerId}`);
-      try {
-        const provider = providerFactory({
-          providerId,
-          globalConfig: { baseUrl: authUrl, appUrl, isOriginAllowed },
-          config: providersConfig.getConfig(providerId),
-          logger,
-          tokenIssuer,
-          discovery,
-          catalogApi,
-        });
+  const oidcRouter = OidcRouter.create({
+    auth: options.auth,
+    tokenIssuer,
+    baseUrl: authUrl,
+    appUrl,
+    userInfo,
+    oidc,
+    logger,
+    httpAuth,
+    config,
+    offlineAccess: options.offlineAccess,
+  });
 
-        const r = Router();
+  router.use(oidcRouter.getRouter());
 
-        r.get('/start', provider.start.bind(provider));
-        r.get('/handler/frame', provider.frameHandler.bind(provider));
-        r.post('/handler/frame', provider.frameHandler.bind(provider));
-        if (provider.logout) {
-          r.post('/logout', provider.logout.bind(provider));
-        }
-        if (provider.refresh) {
-          r.get('/refresh', provider.refresh.bind(provider));
-        }
+  if (offlineAccess) {
+    // Revokes all offline sessions (refresh tokens) of a user, for example
+    // when an administrator needs to sign a user out of all their clients.
+    // Only callable by other backend services, which are responsible for
+    // their own authorization of the request.
+    router.post('/v1/offline-sessions/revoke', async (req, res) => {
+      await httpAuth.credentials(req, { allow: ['service'] });
 
-        router.use(`/${providerId}`, r);
-      } catch (e) {
-        if (process.env.NODE_ENV !== 'development') {
-          throw new Error(
-            `Failed to initialize ${providerId} auth provider, ${e.message}`,
-          );
-        }
-
-        logger.warn(`Skipping ${providerId} auth provider, ${e.message}`);
-
-        router.use(`/${providerId}`, () => {
-          // If the user added the provider under auth.providers but the clientId and clientSecret etc. were not found.
-          throw new NotFoundError(
-            `Auth provider registered for '${providerId}' is misconfigured. This could mean the configs under ` +
-              `auth.providers.${providerId} are missing or the environment variables used are not defined. ` +
-              `Check the auth backend plugin logs when the backend starts to see more details.`,
-          );
-        });
+      const parseResult = revokeOfflineSessionsRequestSchema.safeParse(
+        req.body ?? {},
+      );
+      if (!parseResult.success) {
+        throw new InputError(fromZodError(parseResult.error).message);
       }
-    } else {
-      router.use(`/${providerId}`, () => {
-        throw new NotFoundError(
-          `No auth provider registered for '${providerId}'`,
-        );
+      const { userEntityRef } = parseResult.data;
+
+      const auditorEvent = await auditor?.createEvent({
+        eventId: 'offline-sessions-revoke',
+        severityLevel: 'high',
+        request: req,
+        meta: { userEntityRef },
       });
-    }
+
+      try {
+        const revokedCount =
+          await offlineAccess.revokeRefreshTokensByUserEntityRef(userEntityRef);
+        await auditorEvent?.success({ meta: { revokedCount } });
+        res.json({ revokedCount });
+      } catch (error) {
+        await auditorEvent?.fail({ error });
+        throw error;
+      }
+    });
   }
 
-  router.use(
-    createOidcRouter({
-      tokenIssuer,
-      baseUrl: authUrl,
-    }),
-  );
-
+  // Gives a more helpful error message than a plain 404
   router.use('/:provider/', req => {
     const { provider } = req.params;
     throw new NotFoundError(`Unknown auth provider '${provider}'`);
   });
 
   return router;
-}
-
-export function createOriginFilter(
-  config: Config,
-): (origin: string) => boolean {
-  const appUrl = config.getString('app.baseUrl');
-  const { origin: appOrigin } = new URL(appUrl);
-
-  const allowedOrigins = config.getOptionalStringArray(
-    'auth.experimentalExtraAllowedOrigins',
-  );
-
-  const allowedOriginPatterns =
-    allowedOrigins?.map(
-      pattern => new Minimatch(pattern, { nocase: true, noglobstar: true }),
-    ) ?? [];
-
-  return origin => {
-    if (origin === appOrigin) {
-      return true;
-    }
-    return allowedOriginPatterns.some(pattern => pattern.match(origin));
-  };
 }

@@ -20,4 +20,40 @@
  * @packageDocumentation
  */
 
-export { ElasticSearchSearchEngine } from './engines';
+export { default } from './module';
+export * from './module';
+export {
+  decodeElasticSearchPageCursor,
+  ElasticSearchSearchEngine,
+  isOpenSearchCompatible,
+} from './engines';
+export type {
+  BaseElasticSearchClientOptions,
+  ElasticSearchAgentOptions,
+  ElasticSearchAliasAction,
+  ElasticSearchClientResponse,
+  ElasticSearchClientResponsePromise,
+  ElasticSearchClientWrapper,
+  ElasticSearchConcreteQuery,
+  ElasticSearchClientOptions,
+  ElasticSearchElasticSearchClientOptions,
+  ElasticSearchHighlightConfig,
+  ElasticSearchQueryConfig,
+  ElasticSearchHighlightOptions,
+  ElasticSearchIndexAction,
+  ElasticSearchQueryTranslator,
+  ElasticSearchQueryTranslatorOptions,
+  ElasticSearchConnectionConstructor,
+  ElasticSearchTransportConstructor,
+  ElasticSearchNodeOptions,
+  ElasticSearchOptions,
+  ElasticSearchAuth,
+  ElasticSearchSearchEngineIndexer,
+  ElasticSearchSearchEngineIndexerOptions,
+  ElasticSearchCustomIndexTemplate,
+  ElasticSearchCustomIndexTemplateBody,
+  OpenSearchAuth,
+  OpenSearchConnectionConstructor,
+  OpenSearchElasticSearchClientOptions,
+  OpenSearchNodeOptions,
+} from './engines';

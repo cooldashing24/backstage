@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-const VERSION_PREFIX_GIT_BRANCH = 'GB';
+import { isVisualStudioDomain } from './isVisualStudioDomain';
 
 export class AzureUrl {
   /**
@@ -30,13 +30,22 @@ export class AzureUrl {
     let repo;
 
     const parts = url.pathname.split('/').map(part => decodeURIComponent(part));
-    if (parts[2] === '_git') {
+
+    if (isVisualStudioDomain(url.origin) && parts[2] === '_git') {
+      owner = url.host.split('.')[0];
+      project = parts[1];
+      repo = parts[3];
+    } else if (parts[2] === '_git') {
       owner = parts[1];
       project = repo = parts[3];
     } else if (parts[3] === '_git') {
       owner = parts[1];
       project = parts[2];
       repo = parts[4];
+    } else if (parts[4] === '_git') {
+      owner = `${parts[1]}/${parts[2]}`;
+      project = parts[3];
+      repo = parts[5];
     }
 
     if (!owner || !project || !repo) {
@@ -46,16 +55,19 @@ export class AzureUrl {
     const path = url.searchParams.get('path') ?? undefined;
 
     let ref;
+    let prefix;
     const version = url.searchParams.get('version');
     if (version) {
-      const prefix = version.slice(0, 2);
-      if (prefix !== 'GB') {
-        throw new Error('Azure URL version must point to a git branch');
+      prefix = version.slice(0, 2);
+      if (prefix !== 'GB' && prefix !== 'GT') {
+        throw new Error(
+          'Azure URL version must point to a git branch or git tag',
+        );
       }
       ref = version.slice(2);
     }
 
-    return new AzureUrl(url.origin, owner, project, repo, path, ref);
+    return new AzureUrl(url.origin, owner, project, repo, path, ref, prefix);
   }
 
   #origin: string;
@@ -64,6 +76,7 @@ export class AzureUrl {
   #repo: string;
   #path?: string;
   #ref?: string;
+  #prefix?: string;
 
   private constructor(
     origin: string,
@@ -72,6 +85,7 @@ export class AzureUrl {
     repo: string,
     path?: string,
     ref?: string,
+    prefix?: string,
   ) {
     this.#origin = origin;
     this.#owner = owner;
@@ -79,6 +93,7 @@ export class AzureUrl {
     this.#repo = repo;
     this.#path = path;
     this.#ref = ref;
+    this.#prefix = prefix;
   }
 
   #baseUrl = (...parts: string[]): URL => {
@@ -87,6 +102,16 @@ export class AzureUrl {
     return url;
   };
 
+  #setVersionDescriptor(url: URL, parameterPrefix = 'versionDescriptor'): void {
+    if (this.#ref) {
+      url.searchParams.set(`${parameterPrefix}.version`, this.#ref);
+      url.searchParams.set(
+        `${parameterPrefix}.versionType`,
+        this.#prefix === 'GT' ? 'tag' : 'branch',
+      );
+    }
+  }
+
   /**
    * Returns a repo URL that can be used to navigate to the resource in azure.
    *
@@ -94,7 +119,9 @@ export class AzureUrl {
    */
   toRepoUrl(): string {
     let url;
-    if (this.#project === this.#repo) {
+    if (isVisualStudioDomain(this.#origin)) {
+      url = this.#baseUrl(this.#project, '_git', this.#repo);
+    } else if (this.#project === this.#repo) {
       url = this.#baseUrl(this.#owner, '_git', this.#repo);
     } else {
       url = this.#baseUrl(this.#owner, this.#project, '_git', this.#repo);
@@ -104,7 +131,7 @@ export class AzureUrl {
       url.searchParams.set('path', this.#path);
     }
     if (this.#ref) {
-      url.searchParams.set('version', VERSION_PREFIX_GIT_BRANCH + this.#ref);
+      url.searchParams.set('version', this.#prefix + this.#ref);
     }
 
     return url.toString();
@@ -122,21 +149,32 @@ export class AzureUrl {
       );
     }
 
-    const url = this.#baseUrl(
-      this.#owner,
-      this.#project,
-      '_apis',
-      'git',
-      'repositories',
-      this.#repo,
-      'items',
-    );
+    let url;
+    if (isVisualStudioDomain(this.#origin)) {
+      url = this.#baseUrl(
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'items',
+      );
+    } else {
+      url = this.#baseUrl(
+        this.#owner,
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'items',
+      );
+    }
+
     url.searchParams.set('api-version', '6.0');
     url.searchParams.set('path', this.#path);
 
-    if (this.#ref) {
-      url.searchParams.set('version', this.#ref);
-    }
+    this.#setVersionDescriptor(url);
 
     return url.toString();
   }
@@ -147,15 +185,28 @@ export class AzureUrl {
    * Throws an error if the URL does not point to a repo.
    */
   toArchiveUrl(): string {
-    const url = this.#baseUrl(
-      this.#owner,
-      this.#project,
-      '_apis',
-      'git',
-      'repositories',
-      this.#repo,
-      'items',
-    );
+    let url;
+    if (isVisualStudioDomain(this.#origin)) {
+      url = this.#baseUrl(
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'items',
+      );
+    } else {
+      url = this.#baseUrl(
+        this.#owner,
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'items',
+      );
+    }
+
     url.searchParams.set('recursionLevel', 'full');
     url.searchParams.set('download', 'true');
     url.searchParams.set('api-version', '6.0');
@@ -163,9 +214,7 @@ export class AzureUrl {
     if (this.#path) {
       url.searchParams.set('scopePath', this.#path);
     }
-    if (this.#ref) {
-      url.searchParams.set('version', this.#ref);
-    }
+    this.#setVersionDescriptor(url);
 
     return url.toString();
   }
@@ -176,20 +225,31 @@ export class AzureUrl {
    * Throws an error if the URL does not point to a commit.
    */
   toCommitsUrl(): string {
-    const url = this.#baseUrl(
-      this.#owner,
-      this.#project,
-      '_apis',
-      'git',
-      'repositories',
-      this.#repo,
-      'commits',
-    );
+    let url;
+    if (isVisualStudioDomain(this.#origin)) {
+      url = this.#baseUrl(
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'commits',
+      );
+    } else {
+      url = this.#baseUrl(
+        this.#owner,
+        this.#project,
+        '_apis',
+        'git',
+        'repositories',
+        this.#repo,
+        'commits',
+      );
+    }
+
     url.searchParams.set('api-version', '6.0');
 
-    if (this.#ref) {
-      url.searchParams.set('searchCriteria.itemVersion.version', this.#ref);
-    }
+    this.#setVersionDescriptor(url, 'searchCriteria.itemVersion');
 
     return url.toString();
   }
@@ -227,5 +287,12 @@ export class AzureUrl {
    */
   getRef(): string | undefined {
     return this.#ref;
+  }
+
+  /**
+   * Returns the git prefix in the repo if the URL contains one.
+   */
+  getPrefix(): string | undefined {
+    return this.#prefix;
   }
 }

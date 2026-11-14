@@ -1,0 +1,216 @@
+/*
+ * Copyright 2024 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  JSX,
+  lazy,
+  ReactNode,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import {
+  ConfigApi,
+  FrontendFeature,
+  FrontendFeatureLoader,
+} from '@backstage/frontend-plugin-api';
+import { Progress } from '@backstage/core-components';
+// eslint-disable-next-line @backstage/no-relative-monorepo-imports
+import { defaultConfigLoaderSync } from '../../core-app-api/src/app/defaultConfigLoader';
+// eslint-disable-next-line @backstage/no-relative-monorepo-imports
+import { overrideBaseUrlConfigs } from '../../core-app-api/src/app/overrideBaseUrlConfigs';
+import { ConfigReader } from '@backstage/config';
+import {
+  CreateAppRouteBinder,
+  ExtensionFactoryMiddleware,
+  FinalizedSpecializedApp,
+  prepareSpecializedApp,
+  PreparedSpecializedApp,
+  FrontendPluginInfoResolver,
+} from '@backstage/frontend-app-api';
+// eslint-disable-next-line @backstage/no-relative-monorepo-imports
+import type { CreateSpecializedAppInternalOptions } from '../../frontend-app-api/src/wiring/prepareSpecializedApp';
+import appPlugin from '@backstage/plugin-app';
+import { discoverAvailableFeatures } from './discovery';
+import { resolveAsyncFeatures } from './resolution';
+import { maybeCreateErrorPage } from './maybeCreateErrorPage';
+
+/**
+ * Options for {@link createApp}.
+ *
+ * @public
+ */
+export interface CreateAppOptions {
+  /**
+   * The list of features to load.
+   */
+  features?: (FrontendFeature | FrontendFeatureLoader)[];
+
+  /**
+   * Allows for the binding of plugins' external route refs within the app.
+   */
+  bindRoutes?(context: { bind: CreateAppRouteBinder }): void;
+
+  /**
+   * Advanced, more rarely used options.
+   */
+  advanced?: {
+    /**
+     * Sets a custom config loader, replacing the builtin one.
+     *
+     * This can be used e.g. if you have the need to source config out of custom
+     * storages.
+     */
+    configLoader?: () => Promise<{ config: ConfigApi }>;
+
+    /**
+     * Applies one or more middleware on every extension, as they are added to
+     * the application.
+     *
+     * This is an advanced use case for modifying extension data on the fly as
+     * it gets emitted by extensions being instantiated.
+     */
+    extensionFactoryMiddleware?:
+      | ExtensionFactoryMiddleware
+      | ExtensionFactoryMiddleware[];
+
+    /**
+     * The element to render while loading the app (waiting for config, features, etc).
+     *
+     * This is the `<Progress />` component from `@backstage/core-components` by default.
+     * If set to `null` then no loading fallback element is rendered at all.
+     */
+    loadingElement?: ReactNode;
+
+    /**
+     * Allows for customizing how plugin info is retrieved.
+     */
+    pluginInfoResolver?: FrontendPluginInfoResolver;
+  };
+}
+
+/**
+ * Creates a new Backstage frontend app instance. See https://backstage.io/docs/frontend-system/building-apps/index
+ *
+ * @public
+ */
+export function createApp(options?: CreateAppOptions): {
+  createRoot(): JSX.Element;
+} {
+  let suspenseFallback = options?.advanced?.loadingElement;
+  if (suspenseFallback === undefined) {
+    suspenseFallback = <Progress />;
+  }
+
+  async function appLoader() {
+    const config =
+      (await options?.advanced?.configLoader?.().then(c => c.config)) ??
+      ConfigReader.fromConfigs(
+        overrideBaseUrlConfigs(defaultConfigLoaderSync()),
+      );
+
+    const { features: discoveredFeaturesAndLoaders } =
+      discoverAvailableFeatures(config);
+    const { features: loadedFeatures } = await resolveAsyncFeatures({
+      config,
+      features: [...discoveredFeaturesAndLoaders, ...(options?.features ?? [])],
+    });
+
+    // Handed over synchronously while the app is being prepared, so it is
+    // already the real teardown by the time anything renders.
+    let disposeApp: () => void = () => {};
+    const preparedApp = prepareSpecializedApp({
+      features: [appPlugin, ...loadedFeatures],
+      config,
+      bindRoutes: options?.bindRoutes,
+      advanced: options?.advanced,
+      __internal: {
+        onDispose: dispose => {
+          disposeApp = dispose;
+        },
+      },
+    } as CreateSpecializedAppInternalOptions);
+
+    return {
+      default: () => (
+        <PreparedAppRoot preparedApp={preparedApp} dispose={disposeApp} />
+      ),
+    };
+  }
+
+  const LazyApp = lazy(appLoader);
+
+  return {
+    createRoot() {
+      return (
+        <Suspense fallback={suspenseFallback}>
+          <LazyApp />
+        </Suspense>
+      );
+    },
+  };
+}
+
+function PreparedAppRoot(props: {
+  preparedApp: PreparedSpecializedApp;
+  dispose: () => void;
+}): JSX.Element {
+  const { preparedApp, dispose } = props;
+  const mountedDisposeRef = useRef<() => void>();
+  const bootstrapApp = preparedApp.getBootstrapApp();
+  const [finalized, setFinalized] = useState<{
+    preparedApp: PreparedSpecializedApp;
+    app: FinalizedSpecializedApp;
+  }>();
+
+  useEffect(
+    () => preparedApp.onFinalized(app => setFinalized({ preparedApp, app })),
+    [preparedApp],
+  );
+  const finalizedApp =
+    finalized?.preparedApp === preparedApp ? finalized.app : undefined;
+
+  // The app owns browser resources for as long as it is mounted, most notably
+  // the `popstate` listener behind app navigation, so unmounting the React root
+  // releases them.
+  //
+  // Fast Refresh can preserve this component while replacing the app. Track
+  // which app owns the mounted root so that replaying effects for the same app
+  // keeps it alive, while replacing the app releases the previous instance.
+  useEffect(() => {
+    mountedDisposeRef.current = dispose;
+    return () => {
+      mountedDisposeRef.current = undefined;
+      queueMicrotask(() => {
+        if (mountedDisposeRef.current !== dispose) {
+          dispose();
+        }
+      });
+    };
+  }, [dispose]);
+
+  if (!finalizedApp) {
+    return bootstrapApp.element;
+  }
+
+  const errorPage = maybeCreateErrorPage(finalizedApp);
+  if (errorPage) {
+    return errorPage;
+  }
+
+  return finalizedApp.element;
+}

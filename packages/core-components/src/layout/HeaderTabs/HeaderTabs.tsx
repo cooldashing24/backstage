@@ -13,13 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import Box from '@material-ui/core/Box';
+import { makeStyles } from '@material-ui/core/styles';
+import TabUI, { TabProps } from '@material-ui/core/Tab';
+import Tabs from '@material-ui/core/Tabs';
+import {
+  ElementType,
+  ChangeEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 
 // TODO(blam): Remove this implementation when the Tabs are ready
 // This is just a temporary solution to implementing tabs for now
 
-import React, { useState, useEffect } from 'react';
-import { makeStyles, Tabs, Tab as TabUI, TabProps } from '@material-ui/core';
-
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link HeaderTabs} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type HeaderTabsClassKey =
   | 'tabsWrapper'
   | 'defaultTab'
@@ -32,12 +45,13 @@ const useStyles = makeStyles(
       gridArea: 'pageSubheader',
       backgroundColor: theme.palette.background.paper,
       paddingLeft: theme.spacing(3),
+      minWidth: 0,
     },
     defaultTab: {
-      padding: theme.spacing(3, 3),
       ...theme.typography.caption,
+      padding: theme.spacing(3, 3),
       textTransform: 'uppercase',
-      fontWeight: 'bold',
+      fontWeight: theme.typography.fontWeightBold,
       color: theme.palette.text.secondary,
     },
     selected: {
@@ -53,10 +67,14 @@ const useStyles = makeStyles(
   { name: 'BackstageHeaderTabs' },
 );
 
+/**
+ * @deprecated Use the replacement described in {@link HeaderTabs} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type Tab = {
   id: string;
   label: string;
-  tabProps?: TabProps<React.ElementType, { component?: React.ElementType }>;
+  tabProps?: TabProps<ElementType, { component?: ElementType }>;
 };
 
 type HeaderTabsProps = {
@@ -64,17 +82,30 @@ type HeaderTabsProps = {
   onChange?: (index: number) => void;
   selectedIndex?: number;
 };
+
+/**
+ * Horizontal Tabs component
+ *
+ * @public
+ *
+ * @deprecated Use `Tabs`, `TabList`, `Tab`, and `TabPanel` from `@backstage/ui`
+ * for content tabs, or `PluginHeader` tabs for navigation. Adapt index-based
+ * selection to tab keys and `onSelectionChange`; navigation tabs use `href`.
+ */
 export function HeaderTabs(props: HeaderTabsProps) {
   const { tabs, onChange, selectedIndex } = props;
   const [selectedTab, setSelectedTab] = useState<number>(selectedIndex ?? 0);
   const styles = useStyles();
 
-  const handleChange = (_: React.ChangeEvent<{}>, index: number) => {
-    if (selectedIndex === undefined) {
-      setSelectedTab(index);
-    }
-    if (onChange) onChange(index);
-  };
+  const handleChange = useCallback(
+    (_: ChangeEvent<{}>, index: number) => {
+      if (selectedIndex === undefined) {
+        setSelectedTab(index);
+      }
+      if (onChange) onChange(index);
+    },
+    [selectedIndex, onChange],
+  );
 
   useEffect(() => {
     if (selectedIndex !== undefined) {
@@ -83,29 +114,28 @@ export function HeaderTabs(props: HeaderTabsProps) {
   }, [selectedIndex]);
 
   return (
-    <div className={styles.tabsWrapper}>
+    <Box className={styles.tabsWrapper}>
       <Tabs
-        selectionFollowsFocus
         indicatorColor="primary"
         textColor="inherit"
         variant="scrollable"
         scrollButtons="auto"
-        aria-label="scrollable auto tabs example"
+        aria-label="tabs"
         onChange={handleChange}
         value={selectedTab}
       >
         {tabs.map((tab, index) => (
           <TabUI
-            {...tab.tabProps}
             data-testid={`header-tab-${index}`}
             label={tab.label}
             key={tab.id}
             value={index}
             className={styles.defaultTab}
             classes={{ selected: styles.selected, root: styles.tabRoot }}
+            {...tab.tabProps}
           />
         ))}
       </Tabs>
-    </div>
+    </Box>
   );
 }

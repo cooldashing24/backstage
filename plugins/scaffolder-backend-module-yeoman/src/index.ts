@@ -13,4 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * A module for the scaffolder backend that lets you template projects using
+ * {@link https://yeoman.io/ | Yeoman}.
+ *
+ * @packageDocumentation
+ */
 export * from './actions';
+export { yeomanModule as default } from './module';

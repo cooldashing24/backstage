@@ -13,27 +13,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-import {
-  Checkbox,
-  Chip,
-  ClickAwayListener,
-  FormControl,
-  InputBase,
-  MenuItem,
-  Select,
-  Typography,
-} from '@material-ui/core';
+import Box from '@material-ui/core/Box';
+import Checkbox from '@material-ui/core/Checkbox';
+import Chip from '@material-ui/core/Chip';
+import FormControl from '@material-ui/core/FormControl';
+import InputBase from '@material-ui/core/InputBase';
+import InputLabel from '@material-ui/core/InputLabel';
+import MenuItem from '@material-ui/core/MenuItem';
+import Select from '@material-ui/core/Select';
 import {
   createStyles,
   makeStyles,
   Theme,
   withStyles,
 } from '@material-ui/core/styles';
-import React, { useEffect, useState } from 'react';
+import Typography from '@material-ui/core/Typography';
+import CancelIcon from '@material-ui/icons/Cancel';
+import { ChangeEvent, useEffect, useState } from 'react';
+
 import ClosedDropdown from './static/ClosedDropdown';
 import OpenedDropdown from './static/OpenedDropdown';
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type SelectInputBaseClassKey = 'root' | 'input';
 
 const BootstrapInput = withStyles(
@@ -43,25 +48,32 @@ const BootstrapInput = withStyles(
         'label + &': {
           marginTop: theme.spacing(3),
         },
+        '&.Mui-focused > div[role=button]': {
+          borderColor: theme.palette.primary.main,
+        },
       },
       input: {
-        borderRadius: 4,
+        borderRadius: theme.shape.borderRadius,
         position: 'relative',
         backgroundColor: theme.palette.background.paper,
         border: '1px solid #ced4da',
-        fontSize: 16,
-        padding: '10px 26px 10px 12px',
+        fontSize: theme.typography.body1.fontSize,
+        padding: theme.spacing(1.25, 3.25, 1.25, 1.5),
         transition: theme.transitions.create(['border-color', 'box-shadow']),
-        fontFamily: 'Helvetica Neue',
         '&:focus': {
           background: theme.palette.background.paper,
-          borderRadius: 4,
+          borderRadius: theme.shape.borderRadius,
         },
       },
     }),
   { name: 'BackstageSelectInputBase' },
 )(InputBase);
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type SelectClassKey =
   | 'formControl'
   | 'label'
@@ -74,13 +86,22 @@ const useStyles = makeStyles(
   (theme: Theme) =>
     createStyles({
       formControl: {
-        margin: `${theme.spacing(1)} 0px`,
-        maxWidth: 300,
+        margin: theme.spacing(1, 0),
       },
       label: {
         transform: 'initial',
         fontWeight: 'bold',
-        fontSize: 14,
+        fontSize: theme.typography.body2.fontSize,
+        fontFamily: theme.typography.fontFamily,
+        color: theme.palette.text.primary,
+        '&.Mui-focused': {
+          color: theme.palette.text.primary,
+        },
+      },
+      formLabel: {
+        transform: 'initial',
+        fontWeight: 'bold',
+        fontSize: theme.typography.body2.fontSize,
         fontFamily: theme.typography.fontFamily,
         color: theme.palette.text.primary,
         '&.Mui-focused': {
@@ -95,6 +116,7 @@ const useStyles = makeStyles(
         margin: 2,
       },
       checkbox: {},
+
       root: {
         display: 'flex',
         flexDirection: 'column',
@@ -103,23 +125,49 @@ const useStyles = makeStyles(
   { name: 'BackstageSelect' },
 );
 
-type Item = {
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
+export type SelectItem = {
   label: string;
   value: string | number;
 };
 
-type Selection = string | string[] | number | number[];
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
+export type SelectedItems = string | string[] | number | number[];
 
+/**
+ * @deprecated Use the replacement described in {@link Select} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type SelectProps = {
   multiple?: boolean;
-  items: Item[];
+  items: SelectItem[];
   label: string;
   placeholder?: string;
-  selected?: Selection;
-  onChange: (arg: Selection) => void;
+  selected?: SelectedItems;
+  onChange: (arg: SelectedItems) => void;
   triggerReset?: boolean;
+  native?: boolean;
+  disabled?: boolean;
+  margin?: 'dense' | 'none';
+  'data-testid'?: string;
 };
 
+/**
+ * @public
+ * @deprecated Use `Select` from `@backstage/ui` instead. Convert `items` to
+ * `options` with string `id` fields, use `value` and `onChange` for selection,
+ * and replace `multiple` with `selectionMode="multiple"` for multiple
+ * selection. Adapt selected values and callbacks to the BUI contract;
+ * the props are not interchangeable.
+ */
 export function SelectComponent(props: SelectProps) {
   const {
     multiple,
@@ -129,9 +177,13 @@ export function SelectComponent(props: SelectProps) {
     selected,
     onChange,
     triggerReset,
+    native = false,
+    disabled = false,
+    margin,
+    'data-testid': dataTestId = 'select',
   } = props;
   const classes = useStyles();
-  const [value, setValue] = useState<Selection>(
+  const [value, setValue] = useState<SelectedItems>(
     selected || (multiple ? [] : ''),
   );
   const [isOpen, setOpen] = useState(false);
@@ -141,17 +193,19 @@ export function SelectComponent(props: SelectProps) {
   }, [triggerReset, multiple]);
 
   useEffect(() => {
-    if (selected !== undefined) {
-      setValue(selected);
-    }
-  }, [selected]);
+    setValue(selected || (multiple ? [] : ''));
+  }, [selected, multiple]);
 
-  const handleChange = (event: React.ChangeEvent<{ value: unknown }>) => {
-    setValue(event.target.value as Selection);
-    onChange(event.target.value as Selection);
+  const handleChange = (event: ChangeEvent<{ value: unknown }>) => {
+    setValue(event.target.value as SelectedItems);
+    onChange(event.target.value as SelectedItems);
   };
 
-  const handleClick = (event: React.ChangeEvent<any>) => {
+  const handleOpen = (event: ChangeEvent<any>) => {
+    if (disabled) {
+      event.preventDefault();
+      return;
+    }
     setOpen(previous => {
       if (multiple && !(event.target instanceof HTMLElement)) {
         return true;
@@ -160,7 +214,7 @@ export function SelectComponent(props: SelectProps) {
     });
   };
 
-  const handleClickAway = () => {
+  const handleClose = () => {
     setOpen(false);
   };
 
@@ -171,61 +225,83 @@ export function SelectComponent(props: SelectProps) {
   };
 
   return (
-    <div className={classes.root}>
-      <Typography variant="button">{label}</Typography>
-      <ClickAwayListener onClickAway={handleClickAway}>
-        <FormControl className={classes.formControl}>
-          <Select
-            value={value}
-            data-testid="select"
-            displayEmpty
-            multiple={multiple}
-            onChange={handleChange}
-            onClick={handleClick}
-            open={isOpen}
-            input={<BootstrapInput />}
-            renderValue={s =>
-              multiple && (value as any[]).length !== 0 ? (
-                <div className={classes.chips}>
-                  {(s as string[]).map(selectedValue => (
+    <Box className={classes.root}>
+      <FormControl className={classes.formControl}>
+        <InputLabel className={classes.formLabel}>{label}</InputLabel>
+        <Select
+          aria-label={label}
+          value={value}
+          native={native}
+          disabled={disabled}
+          data-testid={dataTestId}
+          displayEmpty
+          multiple={multiple}
+          margin={margin}
+          onChange={handleChange}
+          open={isOpen}
+          onOpen={handleOpen}
+          onClose={handleClose}
+          input={<BootstrapInput />}
+          label={label}
+          renderValue={s =>
+            multiple && (value as any[]).length !== 0 ? (
+              <Box className={classes.chips}>
+                {(s as string[]).map(selectedValue => {
+                  const item = items.find(el => el.value === selectedValue);
+                  return item ? (
                     <Chip
-                      key={items.find(el => el.value === selectedValue)?.value}
-                      label={
-                        items.find(el => el.value === selectedValue)?.label
-                      }
+                      data-testid="chip"
+                      key={item?.value}
+                      label={item?.label}
                       clickable
+                      deleteIcon={
+                        <CancelIcon
+                          data-testid="cancel-icon"
+                          onMouseDown={event => event.stopPropagation()}
+                        />
+                      }
                       onDelete={handleDelete(selectedValue)}
                       className={classes.chip}
                     />
-                  ))}
-                </div>
-              ) : (
-                <Typography>
-                  {(value as any[]).length === 0
-                    ? placeholder || ''
-                    : items.find(el => el.value === s)?.label}
-                </Typography>
-              )
-            }
-            IconComponent={() =>
-              !isOpen ? <ClosedDropdown /> : <OpenedDropdown />
-            }
-            MenuProps={{
-              anchorOrigin: {
-                vertical: 'bottom',
-                horizontal: 'left',
-              },
-              transformOrigin: {
-                vertical: 'top',
-                horizontal: 'left',
-              },
-              getContentAnchorEl: null,
-            }}
-          >
-            {placeholder && !multiple && (
-              <MenuItem value={[]}>{placeholder}</MenuItem>
-            )}
-            {items &&
+                  ) : (
+                    false
+                  );
+                })}
+              </Box>
+            ) : (
+              <Typography>
+                {(value as any[]).length === 0
+                  ? placeholder || ''
+                  : items.find(el => el.value === s)?.label}
+              </Typography>
+            )
+          }
+          IconComponent={() =>
+            !isOpen ? <ClosedDropdown /> : <OpenedDropdown />
+          }
+          MenuProps={{
+            anchorOrigin: {
+              vertical: 'bottom',
+              horizontal: 'left',
+            },
+            transformOrigin: {
+              vertical: 'top',
+              horizontal: 'left',
+            },
+            getContentAnchorEl: null,
+          }}
+        >
+          {!!placeholder && !multiple && (
+            <MenuItem value={[]}>{placeholder}</MenuItem>
+          )}
+          {native
+            ? items &&
+              items.map(item => (
+                <option value={item.value} key={item.value}>
+                  {item.label}
+                </option>
+              ))
+            : items &&
               items.map(item => (
                 <MenuItem key={item.value} value={item.value}>
                   {multiple && (
@@ -238,9 +314,8 @@ export function SelectComponent(props: SelectProps) {
                   {item.label}
                 </MenuItem>
               ))}
-          </Select>
-        </FormControl>
-      </ClickAwayListener>
-    </div>
+        </Select>
+      </FormControl>
+    </Box>
   );
 }

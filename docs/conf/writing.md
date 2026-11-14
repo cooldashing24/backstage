@@ -16,8 +16,8 @@ app:
   baseUrl: http://localhost:3000
 
 backend:
-  listen: 0.0.0.0:7000
-  baseUrl: http://localhost:7000
+  listen: 0.0.0.0:7007
+  baseUrl: http://localhost:7007
 
 organization:
   name: CNCF
@@ -41,6 +41,57 @@ are needed by the frontend, use the following command:
 ```sh
 yarn backstage-cli config:docs
 ```
+
+## Restricting public configuration
+
+:::note
+This feature is supported only with the default Rspack build. Legacy webpack
+builds, enabled with `LEGACY_WEBPACK_BUILD`, embed frontend configuration in the
+JavaScript bundle, which is not restricted by these allowlists.
+:::
+
+When serving a protected app with a
+[public entry point](../tutorials/enable-public-entry.md), the app backend injects
+all frontend-visible configuration into both entry points by default. To restrict
+what is initially exposed to users without an authenticated session cookie,
+configure `app.publicConfig`:
+
+```yaml
+app:
+  publicConfig:
+    allowedConfig:
+      - app.title
+      - backend.baseUrl
+      - auth.environment
+      - auth.providers
+    allowedExtensions:
+      - sign-in-page:app
+```
+
+The presence of `app.publicConfig` enables filtering. Missing or empty lists allow
+no config keys or extensions. An existing extension list is replaced with an empty
+list when no extension IDs are allowed.
+
+Allowed key paths include their descendants, except that `app.extensions` is
+always controlled exclusively by `allowedExtensions`, including when `app` or
+`app.extensions` is listed in `allowedConfig`. Extension IDs are matched exactly
+for both string entries and object entries. These IDs select extension configuration
+to expose; they do not control which extensions the public app loads. Normal
+[frontend visibility rules](./defining.md#visibility) still apply. Authenticated
+users continue to receive the full frontend-visible configuration.
+
+Filtering applies to the injected configuration payload. HTML templates still
+receive the full frontend-visible config, so titles and asset paths work even
+when their config keys are omitted from `allowedConfig`. Values explicitly
+rendered by a template remain visible in the HTML regardless of these allowlists.
+
+Do not combine `app.publicConfig` with `app.disableConfigInjection: true`.
+Filtering requires runtime configuration injection; disabling injection serves
+the configuration embedded at build time without applying these allowlists.
+
+This setting only applies when serving the enabled public entry point to
+unauthenticated users. It has no effect when that entry point is absent or
+disabled. The main entry point always receives the full frontend-visible config.
 
 ## Environment Variable Overrides
 
@@ -67,13 +118,18 @@ production build.
 
 ## Configuration Files
 
-It is possible to have multiple configuration files, both to support different
-environments, but also to define configuration that is local to specific
-packages. The configuration files to load are selected using a `--config <path>`
-flag, and it is possible to load any number of files. Paths are relative to the
-working directory of the executed process, for example `package/backend`. This
-means that to select a config file in the repo root when running the backend,
-you would use `--config ../../my-config.yaml`.
+It is possible to have multiple configuration files (bundled and/or remote\*),
+both to support different environments, but also to define configuration that is
+local to specific packages. The configuration files to load are selected using a
+`--config <local-path|url>` flag, and it is possible to load any number of
+files. Paths are relative to the working directory of the executed process, for
+example `package/backend`. This means that to select a config file in the repo
+root when running the backend, you would use `--config ../../my-config.yaml`,
+and for config file on a config server you would use
+`--config https://some.domain.io/app-config.yaml`
+
+**Note**: In case URLs are passed, it is also needed to set the remote option in
+the loadBackendConfig call.
 
 If no `config` flags are specified, the default behavior is to load
 `app-config.yaml` and, if it exists, `app-config.local.yaml` from the repo root.
@@ -85,7 +141,7 @@ are NOT loaded. To include them you need to explicitly include them with a flag,
 for example:
 
 ```shell
-yarn start --config ../../app-config.yaml --config ../../app-config.staging.yaml
+yarn start --config ../../app-config.yaml --config ../../app-config.staging.yaml --config https://some.domain.io/app-config.yaml
 ```
 
 All loaded configuration files are merged together using the following rules:
@@ -96,6 +152,9 @@ All loaded configuration files are merged together using the following rules:
   contents.
 - Objects are merged together deeply, meaning that if any of the included
   configs contain a value for a given path, it will be found.
+- A `null` value in a config file will be treated as an explicit absence of
+  configuration. This means that the reading will not fall back to a lower priority
+  config, but it will still be treated as if the configuration was not present.
 
 The priority of the configurations is determined by the following rules, in
 order:
@@ -156,7 +215,7 @@ $file: ./my-secret.txt
 
 The `$include` keyword can be used to load configuration values from an external
 file. It's able to load and parse data from `.json`, `.yml`, and `.yaml` files.
-It's also possible to include a url fragment (`#`) to point to a value at the
+It's also possible to include a URL fragment (`#`) to point to a value at the
 given path in the file, using a dot-separated list of keys.
 
 For example, the following would read `my-secret-key` from `my-secrets.json`:
@@ -191,6 +250,18 @@ configuration value will evaluate to `undefined`.
 The substitution syntax can be escaped using `$${...}`, which will be resolved
 as `${...}`.
 
+Parameter substitution syntax (e.g. `${MY_VAR:-default-value}`) is also
+supported to provide a default or fallback value for a given environment
+variable if it is unset, or is declared but has no value. For example:
+
+```yaml
+app:
+  baseUrl: https://${HOST:-localhost:3000}
+```
+
+In the above example, when `HOST` is unset or has no value, it will be
+substituted with `localhost:3000`.
+
 ## Combining Includes and Environment Variable Substitution
 
 The Includes and Environment Variable Substitutions can be combined to do
@@ -215,6 +286,12 @@ clientSecret: someGithubAppClientSecret
 webhookSecret: someWebhookSecret
 privateKey: |
   -----BEGIN RSA PRIVATE KEY-----
-  SomeRsaPrivateKey
+  SomeRsaPrivateKeySecurelyStored
   -----END RSA PRIVATE KEY-----
 ```
+
+:::warning
+Sensitive information, such as private keys, should not be hard coded.
+:::
+
+We recommend that this entire file should be a secret and stored as such in a secure storage solution like Vault, to ensure they are neither exposed nor misused. This example key part only shows the format on how to use the yaml | syntax to make sure that the key is valid.

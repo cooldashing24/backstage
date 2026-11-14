@@ -14,21 +14,137 @@
  * limitations under the License.
  */
 
-import { renderHook } from '@testing-library/react-hooks';
+import { render, renderHook, screen } from '@testing-library/react';
+import { PropsWithChildren } from 'react';
 import { createVersionedContextForTesting } from '@backstage/version-bridge';
+import {
+  appTreeApiRef,
+  iconsApiRef,
+  IconsApi,
+  AppTreeApi,
+  AppTree,
+  AppNode,
+} from '@backstage/frontend-plugin-api';
 import { useApp } from './useApp';
+import { TestApiProvider, withLogCollector } from '@backstage/test-utils';
 
-describe('v1 consumer', () => {
-  const context = createVersionedContextForTesting('app-context');
+describe('useApp', () => {
+  describe('old system', () => {
+    const context = createVersionedContextForTesting('app-context');
 
-  afterEach(() => {
-    context.reset();
+    afterEach(() => {
+      context.reset();
+    });
+
+    it('should provide an app context', () => {
+      const wrapper = ({ children }: PropsWithChildren<{}>) => (
+        <TestApiProvider apis={[]}>{children}</TestApiProvider>
+      );
+      context.set({ 1: 'context-value' });
+
+      const renderedHook = renderHook(() => useApp(), { wrapper });
+      expect(renderedHook.result.current).toBe('context-value');
+    });
   });
 
-  it('should provide an app context', () => {
-    context.set({ 1: 'context-value' });
+  describe('new system', () => {
+    const mockIcon = <svg aria-label="Test icon" />;
+    const mockIconsApi: IconsApi = {
+      icon: jest.fn((key: string) =>
+        key === 'test-icon' ? mockIcon : undefined,
+      ),
+      listIconKeys: jest.fn(() => ['test-icon']),
+    };
 
-    const renderedHook = renderHook(() => useApp());
-    expect(renderedHook.result.current).toBe('context-value');
+    const mockPlugin = {
+      id: 'test-plugin',
+    };
+
+    const mockAppNode: AppNode = {
+      spec: {
+        id: 'test-node',
+        attachTo: { id: 'root', input: 'children' },
+        extension: {} as any,
+        disabled: false,
+        plugin: mockPlugin as any,
+      },
+      edges: {
+        attachments: new Map(),
+      },
+    };
+
+    const mockAppTree: AppTree = {
+      root: mockAppNode,
+      nodes: new Map([['test-node', mockAppNode]]),
+      orphans: [],
+    };
+
+    const mockAppTreeApi: AppTreeApi = {
+      getTree: jest.fn(() => ({ tree: mockAppTree })),
+      getNodesByRoutePath: jest.fn(() => ({ nodes: [] })),
+    };
+
+    it('should provide an app context from new app system', () => {
+      const wrapper = ({ children }: PropsWithChildren<{}>) => (
+        <TestApiProvider
+          apis={[
+            [appTreeApiRef, mockAppTreeApi],
+            [iconsApiRef, mockIconsApi],
+          ]}
+        >
+          {children}
+        </TestApiProvider>
+      );
+
+      const renderedHook = renderHook(() => useApp(), { wrapper });
+
+      const appContext = renderedHook.result.current;
+      expect(appContext).toBeDefined();
+      expect(appContext.getPlugins()).toHaveLength(1);
+      expect(appContext.getPlugins()[0].getId()).toBe('test-plugin');
+      const Icon = appContext.getSystemIcon('test-icon')!;
+      expect(appContext.getSystemIcon('missing')).toBeUndefined();
+      expect(appContext.getSystemIcons()).toEqual({ 'test-icon': Icon });
+      render(<Icon fontSize="small" />);
+      expect(screen.getByLabelText('Test icon')).toHaveStyle({
+        fontSize: '1.25rem',
+      });
+      renderedHook.rerender();
+      expect(renderedHook.result.current.getSystemIcon('test-icon')).toBe(Icon);
+      expect(appContext.getComponents().Progress).toBeDefined();
+      expect(appContext.getComponents().NotFoundErrorPage).toBeDefined();
+    });
+
+    it('should error on missing appTreeApi or iconsApi', () => {
+      withLogCollector(['error'], () => {
+        expect(() =>
+          renderHook(() => useApp(), {
+            wrapper: ({ children }: PropsWithChildren<{}>) => (
+              <TestApiProvider apis={[]}>{children}</TestApiProvider>
+            ),
+          }),
+        ).toThrow('App context is not available');
+
+        expect(() =>
+          renderHook(() => useApp(), {
+            wrapper: ({ children }: PropsWithChildren<{}>) => (
+              <TestApiProvider apis={[[appTreeApiRef, mockAppTreeApi]]}>
+                {children}
+              </TestApiProvider>
+            ),
+          }),
+        ).toThrow('App context is not available');
+
+        expect(() =>
+          renderHook(() => useApp(), {
+            wrapper: ({ children }: PropsWithChildren<{}>) => (
+              <TestApiProvider apis={[[iconsApiRef, mockIconsApi]]}>
+                {children}
+              </TestApiProvider>
+            ),
+          }),
+        ).toThrow('App context is not available');
+      });
+    });
   });
 });

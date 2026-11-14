@@ -13,115 +13,143 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 import {
-  getEntityName,
+  getCompoundEntityRef,
   parseEntityRef,
   stringifyEntityRef,
 } from '@backstage/catalog-model';
-import { InfoCard, InfoCardVariants } from '@backstage/core-components';
-import { useRouteRef } from '@backstage/core-plugin-api';
-import { useEntity } from '@backstage/plugin-catalog-react';
-import { makeStyles, Theme } from '@material-ui/core';
-import qs from 'qs';
-import React, { MouseEvent, useCallback } from 'react';
-import { useNavigate } from 'react-router';
-import { catalogEntityRouteRef, catalogGraphRouteRef } from '../../routes';
+import { useAnalytics, useRouteRef } from '@backstage/core-plugin-api';
 import {
-  ALL_RELATION_PAIRS,
-  Direction,
-  EntityNode,
+  EntityInfoCard,
+  entityPresentationSnapshot,
+  useEntity,
+  entityRouteRef,
+} from '@backstage/plugin-catalog-react';
+import { ButtonLink } from '@backstage/ui';
+import { RiArrowRightLine } from '@remixicon/react';
+import { makeStyles, Theme } from '@material-ui/core/styles';
+import qs from 'qs';
+import { MouseEvent, ReactNode, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { catalogGraphRouteRef } from '../../routes';
+import {
   EntityRelationsGraph,
-  RelationPairs,
+  EntityRelationsGraphProps,
 } from '../EntityRelationsGraph';
+import { useTranslationRef } from '@backstage/frontend-plugin-api';
+import { catalogGraphTranslationRef } from '../../translation';
+import { Direction, EntityNode } from '../../lib/types';
+import classNames from 'classnames';
 
-const useStyles = makeStyles<Theme, { height: number | undefined }>({
-  card: ({ height }) => ({
-    display: 'flex',
-    flexDirection: 'column',
-    maxHeight: height,
-    minHeight: height,
-  }),
-  graph: {
-    flex: 1,
-    minHeight: 0,
+/** @public */
+export type CatalogGraphCardClassKey = 'graph';
+
+const useStyles = makeStyles<Theme, { height?: number }>(
+  {
+    graph: ({ height }) => ({
+      height: height ?? '100%',
+      minHeight: 0,
+    }),
   },
-});
+  { name: 'PluginCatalogGraphCatalogGraphCard' },
+);
 
-export const CatalogGraphCard = ({
-  variant = 'gridItem',
-  relationPairs = ALL_RELATION_PAIRS,
-  maxDepth = 1,
-  unidirectional = true,
-  mergeRelations = true,
-  kinds,
-  relations,
-  direction = Direction.LEFT_RIGHT,
-  height,
-  title = 'Relations',
-  zoom = 'enable-on-click',
-}: {
-  variant?: InfoCardVariants;
-  relationPairs?: RelationPairs;
-  maxDepth?: number;
-  unidirectional?: boolean;
-  mergeRelations?: boolean;
-  kinds?: string[];
-  relations?: string[];
-  direction?: Direction;
-  height?: number;
-  title?: string;
-  zoom?: 'enabled' | 'disabled' | 'enable-on-click';
-}) => {
+export const CatalogGraphCard = (
+  props: Partial<EntityRelationsGraphProps> & {
+    height?: number;
+    title?: string;
+    action?: ReactNode;
+  },
+) => {
+  const { t } = useTranslationRef(catalogGraphTranslationRef);
+  const {
+    relationPairs,
+    maxDepth = 1,
+    unidirectional = true,
+    mergeRelations = true,
+    showArrowHeads,
+    direction = Direction.LEFT_RIGHT,
+    kinds,
+    relations,
+    entityFilter,
+    height,
+    className,
+    action,
+    rootEntityNames,
+    onNodeClick,
+    title = t('catalogGraphCard.title'),
+    zoom = 'enable-on-click',
+  } = props;
+
   const { entity } = useEntity();
-  const entityName = getEntityName(entity);
-  const catalogEntityRoute = useRouteRef(catalogEntityRouteRef);
+  const entityName = useMemo(() => getCompoundEntityRef(entity), [entity]);
+  const catalogEntityRoute = useRouteRef(entityRouteRef);
   const catalogGraphRoute = useRouteRef(catalogGraphRouteRef);
   const navigate = useNavigate();
   const classes = useStyles({ height });
+  const analytics = useAnalytics();
 
-  const onNodeClick = useCallback(
+  const defaultOnNodeClick = useCallback(
     (node: EntityNode, _: MouseEvent<unknown>) => {
       const nodeEntityName = parseEntityRef(node.id);
       const path = catalogEntityRoute({
-        kind: nodeEntityName.kind.toLocaleLowerCase('en-US'),
-        namespace: nodeEntityName.namespace.toLocaleLowerCase('en-US'),
+        kind: nodeEntityName.kind.toLowerCase(),
+        namespace: nodeEntityName.namespace.toLowerCase(),
         name: nodeEntityName.name,
       });
+      analytics.captureEvent(
+        'click',
+        entityPresentationSnapshot(node.entity).primaryTitle,
+        { attributes: { to: path } },
+      );
       navigate(path);
     },
-    [catalogEntityRoute, navigate],
+    [catalogEntityRoute, navigate, analytics],
   );
 
   const catalogGraphParams = qs.stringify(
-    { rootEntityRefs: [stringifyEntityRef(entity)] },
+    {
+      rootEntityRefs: [stringifyEntityRef(entity)],
+      maxDepth: maxDepth,
+      unidirectional,
+      mergeRelations,
+      selectedKinds: kinds,
+      selectedRelations: relations,
+      direction,
+    },
     { arrayFormat: 'brackets', addQueryPrefix: true },
   );
   const catalogGraphUrl = `${catalogGraphRoute()}${catalogGraphParams}`;
 
   return (
-    <InfoCard
+    <EntityInfoCard
       title={title}
-      cardClassName={classes.card}
-      variant={variant}
-      noPadding
-      deepLink={{
-        title: 'View graph',
-        link: catalogGraphUrl,
-      }}
+      headerActions={action}
+      footerActions={
+        <ButtonLink
+          iconEnd={<RiArrowRightLine />}
+          variant="tertiary"
+          href={catalogGraphUrl}
+        >
+          {t('catalogGraphCard.deepLinkTitle')}
+        </ButtonLink>
+      }
     >
       <EntityRelationsGraph
-        rootEntityNames={entityName}
+        {...props}
+        rootEntityNames={rootEntityNames || entityName}
+        onNodeClick={onNodeClick || defaultOnNodeClick}
+        className={classNames(classes.graph, className)}
         maxDepth={maxDepth}
         unidirectional={unidirectional}
         mergeRelations={mergeRelations}
-        kinds={kinds}
-        relations={relations}
         direction={direction}
-        onNodeClick={onNodeClick}
-        className={classes.graph}
         relationPairs={relationPairs}
+        entityFilter={entityFilter}
         zoom={zoom}
+        showArrowHeads={showArrowHeads}
       />
-    </InfoCard>
+    </EntityInfoCard>
   );
 };

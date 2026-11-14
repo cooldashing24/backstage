@@ -1,0 +1,283 @@
+/*
+ * Copyright 2023 The Backstage Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {
+  createExtension,
+  coreExtensionData,
+  createExtensionInput,
+  routeResolutionApiRef,
+  appTreeApiRef,
+  IconComponent,
+  IconElement,
+  Progress,
+  RouteRef,
+  RouteResolutionApi,
+  useApi,
+  appLanguageApiRef,
+  errorApiRef,
+  translationApiRef,
+} from '@backstage/frontend-plugin-api';
+import { legacyNavItemTargetDataRef } from './legacyNavItem';
+import {
+  NavContentBlueprint,
+  NavContentComponent,
+  NavContentComponentProps,
+  NavContentNavItem,
+  NavContentNavItems,
+} from '@backstage/plugin-app-react';
+import { Sidebar, SidebarItem } from '@backstage/core-components';
+import { useMemo } from 'react';
+import { useTranslatedTitles } from '@internal/frontend';
+
+class NavItemBag implements NavContentNavItems {
+  readonly #items: NavContentNavItem[];
+  readonly #index: Map<string, NavContentNavItem>;
+  readonly #taken: Set<string>;
+  #restItems: NavContentNavItem[] | undefined;
+
+  constructor(items: NavContentNavItem[], taken?: Iterable<string>) {
+    this.#items = items;
+    this.#index = new Map(items.map(item => [item.node.spec.id, item]));
+    this.#taken = new Set(taken);
+  }
+
+  take(id: string): NavContentNavItem | undefined {
+    const item = this.#index.get(id);
+    if (item && !this.#taken.has(id)) {
+      this.#taken.add(id);
+      if (this.#restItems) {
+        const index = this.#restItems.findIndex(
+          restItem => restItem.node.spec.id === id,
+        );
+        if (index !== -1) {
+          this.#restItems.splice(index, 1);
+        }
+      }
+    }
+    return item;
+  }
+
+  rest(): NavContentNavItem[] {
+    if (!this.#restItems) {
+      this.#restItems = this.#items.filter(
+        item => !this.#taken.has(item.node.spec.id),
+      );
+    }
+    return this.#restItems;
+  }
+
+  clone(): NavContentNavItems {
+    return new NavItemBag(this.#items, this.#taken);
+  }
+
+  withComponent(Component: (props: NavContentNavItem) => JSX.Element) {
+    let renderedItems: JSX.Element[] | undefined;
+
+    return {
+      take: (id: string) => {
+        const item = this.take(id);
+        if (item && renderedItems) {
+          const index = renderedItems.findIndex(
+            renderedItem => renderedItem.key === item.node.spec.id,
+          );
+          if (index !== -1) {
+            renderedItems.splice(index, 1);
+          }
+        }
+        return item ? <Component key={item.node.spec.id} {...item} /> : null;
+      },
+      rest: (options?: { sortBy?: 'title' }) => {
+        const items = this.rest();
+        if (!renderedItems) {
+          if (options?.sortBy === 'title') {
+            items.sort((a, b) => a.title.localeCompare(b.title));
+          }
+          renderedItems = items.map(item => (
+            <Component key={item.node.spec.id} {...item} />
+          ));
+        }
+        return renderedItems;
+      },
+    };
+  }
+}
+
+function DefaultNavContent(props: NavContentComponentProps) {
+  const items = props.navItems.rest();
+  return (
+    <Sidebar>
+      {items.map(item => (
+        <SidebarItem
+          to={item.href}
+          icon={() => item.icon}
+          text={item.title}
+          key={item.node.spec.id}
+        />
+      ))}
+    </Sidebar>
+  );
+}
+
+// Tries to resolve a routeRef to a link path, returning undefined if it
+// can't be resolved (e.g. parameterized routes).
+function tryResolveLink(
+  routeResolutionApi: RouteResolutionApi,
+  routeRef: RouteRef,
+): string | undefined {
+  try {
+    const link = routeResolutionApi.resolve(routeRef);
+    return link?.();
+  } catch {
+    return undefined;
+  }
+}
+
+// Defers rendering until the app is fully initialized so that APIs like
+// RouteResolutionApi and AppTreeApi are available.
+function NavContentRenderer(props: {
+  Content: NavContentComponent;
+  legacyNavItems: Array<{
+    title: string;
+    icon: IconComponent;
+    routeRef: RouteRef<undefined>;
+  }>;
+}) {
+  const appTreeApi = useApi(appTreeApiRef);
+  const routeResolutionApi = useApi(routeResolutionApiRef);
+
+  // Discover pages eligible for navigation before loading their title translations.
+  const items = useMemo(() => {
+    const { tree } = appTreeApi.getTree();
+    const routesNode = tree.nodes.get('app/routes');
+    if (!routesNode) return [];
+
+    // Index nav items by routeRef for matching against pages
+    const navItemsByRouteRef = new Map<
+      RouteRef,
+      { title: string; icon: IconComponent }
+    >(props.legacyNavItems.map(item => [item.routeRef, item]));
+
+    const pageNodes = routesNode.edges.attachments.get('routes') ?? [];
+    return pageNodes.flatMap((node): NavContentNavItem[] => {
+      if (!node.instance || node.spec.disabled) {
+        return [];
+      }
+
+      const routeRef = node.instance.getData(coreExtensionData.routeRef);
+      if (!routeRef) {
+        return [];
+      }
+
+      const matchingNavItem = navItemsByRouteRef.get(routeRef);
+
+      // PageBlueprint resolves title as: config.title ?? params.title ?? plugin.title ?? pluginId
+      // We want the priority: page (config/params) -> nav item -> plugin -> pluginId
+      const resolvedTitle = node.instance.getData(coreExtensionData.title);
+      const pluginTitle = node.spec.plugin.title;
+      const pluginIcon = node.spec.plugin.icon;
+      const pluginId = node.spec.plugin.pluginId;
+      const hasExplicitPageTitle =
+        resolvedTitle !== undefined &&
+        resolvedTitle !== pluginTitle &&
+        resolvedTitle !== pluginId;
+      const staticTitle = hasExplicitPageTitle
+        ? resolvedTitle
+        : matchingNavItem?.title ?? pluginTitle ?? pluginId;
+
+      // PageBlueprint resolves icon as: params.icon ?? plugin.icon
+      // We want the priority: page (params) -> nav item -> plugin -> (excluded)
+      const resolvedIcon = node.instance.getData(coreExtensionData.icon);
+      const hasExplicitPageIcon = resolvedIcon && !node.spec.plugin.icon;
+      const NavItemIcon = matchingNavItem?.icon;
+
+      let icon: IconElement | undefined;
+      if (hasExplicitPageIcon) {
+        icon = resolvedIcon;
+      } else if (NavItemIcon) {
+        icon = <NavItemIcon />;
+      } else if (resolvedIcon) {
+        icon = resolvedIcon;
+      } else if (pluginIcon) {
+        icon = pluginIcon;
+      }
+
+      if (!icon) {
+        return [];
+      }
+
+      const to = tryResolveLink(routeResolutionApi, routeRef);
+      if (!to) {
+        return [];
+      }
+
+      return [{ node, href: to, title: staticTitle, icon, routeRef }];
+    });
+  }, [appTreeApi, routeResolutionApi, props.legacyNavItems]);
+  const selections = useMemo(
+    () =>
+      items.map(item =>
+        item.node.instance?.getData(coreExtensionData.titleTranslation),
+      ),
+    [items],
+  );
+  const translatedTitles = useTranslatedTitles({
+    translationApi: useApi(translationApiRef),
+    languageApi: useApi(appLanguageApiRef),
+    errorApi: useApi(errorApiRef),
+    selections,
+  });
+  const navItems = useMemo(
+    () =>
+      translatedTitles &&
+      new NavItemBag(
+        items.flatMap((item, index) => {
+          const title = translatedTitles[index] ?? item.title;
+          return title ? [{ ...item, title }] : [];
+        }),
+      ),
+    [items, translatedTitles],
+  );
+
+  return navItems ? <props.Content navItems={navItems} /> : <Progress />;
+}
+
+export const AppNav = createExtension({
+  name: 'nav',
+  attachTo: { id: 'app/layout', input: 'nav' },
+  inputs: {
+    items: createExtensionInput([legacyNavItemTargetDataRef]),
+    content: createExtensionInput([NavContentBlueprint.dataRefs.component], {
+      singleton: true,
+      optional: true,
+      internal: true,
+    }),
+  },
+  output: [coreExtensionData.reactElement],
+  *factory({ inputs }) {
+    const Content =
+      inputs.content?.get(NavContentBlueprint.dataRefs.component) ??
+      DefaultNavContent;
+
+    yield coreExtensionData.reactElement(
+      <NavContentRenderer
+        legacyNavItems={inputs.items.map(item =>
+          item.get(legacyNavItemTargetDataRef),
+        )}
+        Content={Content}
+      />,
+    );
+  },
+});

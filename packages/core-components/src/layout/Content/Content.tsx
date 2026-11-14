@@ -14,10 +14,15 @@
  * limitations under the License.
  */
 
-import React, { PropsWithChildren } from 'react';
+import { makeStyles, Theme } from '@material-ui/core/styles';
 import classNames from 'classnames';
-import { Theme, makeStyles } from '@material-ui/core';
+import { PropsWithChildren } from 'react';
 
+/**
+ * @public
+ * @deprecated Use the replacement described in {@link Content} instead.
+ * BUI components use their own props and styling contracts.
+ */
 export type BackstageContentClassKey = 'root' | 'stretch' | 'noPadding';
 
 const useStyles = makeStyles(
@@ -52,8 +57,18 @@ type Props = {
   className?: string;
 };
 
+/**
+ * The main content part inside a {@link Page}.
+ *
+ * @public
+ *
+ * @deprecated Use `Container` and `Box` from `@backstage/ui` instead. Configure
+ * padding and flex layout as needed; when retaining `Page`, preserve its
+ * `pageContent` grid placement in your layout.
+ */
 export function Content(props: PropsWithChildren<Props>) {
   const { className, stretch, noPadding, children, ...restProps } = props;
+
   const classes = useStyles();
   return (
     <article

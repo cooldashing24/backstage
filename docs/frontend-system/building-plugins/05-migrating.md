@@ -1,0 +1,269 @@
+---
+id: migrating
+title: Migrating Plugins
+sidebar_label: Migration Guide
+description: How to migrate an existing frontend plugin to the new frontend system
+---
+
+This guide allows you to migrate a frontend plugin and its own components, routes, apis to the new frontend system.
+
+The main concept is that routes, components, apis are now extensions. You can use the appropriate [extension blueprints](../architecture/23-extension-blueprints.md) to migrate all of them to extensions.
+
+:::tip
+
+To have an AI coding assistant do this migration, install the `new-frontend-system-migration` skill. See [Published skills](../../ai/skills.md).
+
+:::
+
+## Migrating the plugin
+
+:::note
+
+Unless you are migrating a plugin that is only used within your own project, we recommend all plugins to keep support for the old system intact. The examples below add the new plugin in a new `src/alpha.tsx` entry point. You can instead add it to the main entry point, next to the existing old-system exports.
+
+:::
+
+In the legacy frontend system a plugin was defined in its own `plugin.ts` file as following:
+
+```ts title="my-plugin/src/plugin.ts"
+  import { createPlugin } from '@backstage/core-plugin-api';
+
+  export const myPlugin = createPlugin({
+    id: 'my-plugin',
+    apis: [ ... ],
+    routes: {
+      ...
+    },
+    externalRoutes: {
+      ...
+    },
+  });
+```
+
+In order to migrate the actual definition of the plugin you need to recreate the plugin using the new `createFrontendPlugin` utility exported by `@backstage/frontend-plugin-api`. The new `createFrontendPlugin` function doesn't accept apis anymore as apis are now extensions.
+
+```ts title="my-plugin/src/alpha.tsx"
+  import { createFrontendPlugin } from '@backstage/frontend-plugin-api';
+
+  export default createFrontendPlugin({
+    // The plugin ID is now provided as `pluginId` instead of `id`
+    /* highlight-next-line */
+    pluginId: 'my-plugin',
+    // bind all the extensions to the plugin
+    /* highlight-next-line */
+    extensions: [/* APIs will go here, but don't worry about those yet */],
+    routes: {
+      ...
+    },
+    externalRoutes: {
+      ...
+    },
+  });
+```
+
+The code above binds all the extensions to the plugin. _Important_: Make sure to export the plugin as the default export of an entry point of your package, either the main entry point or a separate one such as `/alpha`, as in the code snippet above. If you use `/alpha`, make sure `src/alpha.tsx` is exported in your `package.json`:
+
+```ts title="my-plugin/package.json"
+  "exports": {
+    ".": "./src/index.ts",
+    /* highlight-add-next-line */
+    "./alpha": "./src/alpha.tsx",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      /* highlight-add-start */
+      "alpha": [
+        "src/alpha.tsx"
+      ],
+      /* highlight-add-end */
+      "package.json": [
+        "package.json"
+      ]
+    }
+  },
+```
+
+## Migrating Pages
+
+Pages that were previously created using the `createRoutableExtension` extension function can be migrated to the new Frontend System using the `PageBlueprint` [extension blueprint](../architecture/23-extension-blueprints.md), exported by `@backstage/frontend-plugin-api`.
+
+In the new system plugins provide more information than they used to. For example, the plugin is now responsible for providing the path for the page, rather than it being part of the app code.
+
+For example, given the following page:
+
+```ts
+export const FooPage = fooPlugin.provide(
+  createRoutableExtension({
+    name: 'FooPage',
+    component: () => import('./components').then(m => m.FooPage),
+    mountPoint: rootRouteRef,
+  }),
+);
+```
+
+and the following instruction in the plugin README:
+
+```tsx
+<Route path="/foo" element={<FooPage />} />
+```
+
+it can be migrated as the following, keeping in mind that you may need to switch from `.ts` to `.tsx`:
+
+```tsx
+import { PageBlueprint } from '@backstage/frontend-plugin-api';
+
+const fooPage = PageBlueprint.make({
+  params: {
+    // This is the path that was previously defined in the app code.
+    // It's labelled as the default one because it can be changed via configuration.
+    path: '/foo',
+    // You can reuse the existing routeRef.
+    routeRef: rootRouteRef,
+    // these inputs usually match the props required by the component.
+    loader: () => import('./components/').then(m => <m.FooPage />),
+  },
+});
+```
+
+Then add the `fooPage` extension to the plugin:
+
+```ts title="my-plugin/src/alpha.tsx"
+  import { createFrontendPlugin } from '@backstage/frontend-plugin-api';
+
+  export default createFrontendPlugin({
+    pluginId: 'my-plugin',
+    // bind all the extensions to the plugin
+    /* highlight-remove-next-line */
+    extensions: [],
+    /* highlight-add-next-line */
+    extensions: [fooPage],
+    ...
+  });
+```
+
+### Pages that route with React Router
+
+Existing new frontend system pages retain implicit React Router v6 routing.
+Route parameters, relative links and nested routes continue to work without
+an immediate migration. In development, consuming this fallback logs a warning
+once per extension per app instance. Render an explicit page adapter to migrate
+that content; pages using only framework routing do not need an adapter.
+
+If the page only needs route parameters and links, switch it to `useRouteRef`, `useRouteRefParams` and `useAppHref` from `@backstage/frontend-plugin-api`. Those answer from the framework and need no router on any page. If the page genuinely drives a route tree of its own, render the matching adapter inside the lazily loaded component:
+
+```tsx
+const fooPage = PageBlueprint.make({
+  params: {
+    path: '/foo',
+    routeRef: rootRouteRef,
+    loader: () => import('./components/').then(m => <m.FooPage />),
+  },
+});
+```
+
+The adapter belongs in the lazily loaded component module. Wrap the page's existing JSX directly; only hooks that consume this router need to be in a child beneath it.
+
+```tsx title="./components/FooPage"
+import { ReactRouterV6PageRouter } from '@backstage/frontend-adapter-react-router-v6';
+
+export function FooPage() {
+  return (
+    <ReactRouterV6PageRouter>
+      {/* Existing page JSX and local routes go here. */}
+    </ReactRouterV6PageRouter>
+  );
+}
+```
+
+Declare it in the component that owns the page or sub-page route mount. an `EntityContentBlueprint` tab already renders inside the adapter its page declared, and a second one there drops the tab's route match. See [Choose a router for a page](./10-page-routers.md) for the other libraries and the full rules.
+
+## Migrating Components
+
+The equivalent utility to replace components created with `createComponentExtension` depends on the context within which the component is used, typically indicated by the naming pattern of the export. Many of these can be migrated to one of the [existing blueprints](03-common-extension-blueprints.md), but in rare cases it may be necessary to use [`createExtension`](../architecture/20-extensions.md#creating-an-extension) directly.
+
+## Migrating APIs
+
+There are a few things to keep in mind in regards to utility APIs.
+
+### React package interface and ref changes
+
+Let's begin with [your `-react` package](../../architecture-decisions/adr011-plugin-package-structure.md). The act of exporting TypeScript interfaces and API refs have not changed from the old system. You can typically keep those as-is. For illustrative purposes, this is an example of an interface and its API ref:
+
+```tsx title="in @internal/plugin-example-react"
+import { createApiRef } from '@backstage/frontend-plugin-api';
+
+/**
+ * Performs some work.
+ * @public
+ */
+export interface WorkApi {
+  doWork(): Promise<void>;
+}
+
+/**
+ * The work interface for the Example plugin.
+ * @public
+ */
+export const workApiRef = createApiRef<WorkApi>({
+  id: 'plugin.example.work',
+});
+```
+
+Note at the top of the file that it uses the updated import from `@backstage/frontend-plugin-api` that we migrated in the previous section, instead of the old `@backstage/core-plugin-api`.
+
+Now let's migrate the implementation of the api. Before we changed the `core-plugin-api` imports the api would have looked somewhat similar to the following:
+
+```tsx title="in @internal/plugin-example, NOTE THIS IS LEGACY CODE"
+import { storageApiRef, createApiFactory } from '@backstage/core-plugin-api';
+import { workApiRef } from '@internal/plugin-example-react';
+import { WorkImpl } from './WorkImpl';
+
+const exampleWorkApi = createApiFactory({
+  api: workApiRef,
+  deps: { storageApi: storageApiRef },
+  factory: ({ storageApi }) => new WorkImpl({ storageApi }),
+});
+```
+
+The major changes we'll make are
+
+- Change the old `@backstage/core-plugin-api` imports to the new `@backstage/frontend-plugin-api` package as per the top section of this guide
+- Wrap the existing API factory in a `ApiBlueprint`
+
+The end result, after simplifying imports and cleaning up a bit, might look like this:
+
+```tsx title="in @internal/plugin-example"
+import { storageApiRef, ApiBlueprint } from '@backstage/frontend-plugin-api';
+import { workApiRef } from '@internal/plugin-example-react';
+import { WorkImpl } from './WorkImpl';
+
+const exampleWorkApi = ApiBlueprint.make({
+  params: defineParams =>
+    defineParams({
+      api: workApiRef,
+      deps: { storageApi: storageApiRef },
+      factory: ({ storageApi }) => new WorkImpl({ storageApi }),
+    }),
+});
+```
+
+Finally, let's add the `exampleWorkApi` extension to the plugin:
+
+```ts title="my-plugin/src/alpha.tsx"
+  import { createFrontendPlugin } from '@backstage/frontend-plugin-api';
+
+  export default createFrontendPlugin({
+    pluginId: 'my-plugin',
+    // bind all the extensions to the plugin
+    /* highlight-remove-next-line */
+    extensions: [fooPage],
+    /* highlight-add-next-line */
+    extensions: [exampleWorkApi, fooPage],
+    ...
+  });
+```
+
+### Further work
+
+Since utility APIs are now complete extensions, you may want to take a bigger look at how they used to be used, and what the new frontend system offers. You may for example consider [adding configurability or inputs](../utility-apis/02-creating.md) to your API, if that makes sense for your current application.
